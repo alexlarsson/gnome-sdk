@@ -65,7 +65,7 @@ main (int argc,
     { "bin", "usr/bin" },
     { "sbin", "usr/sbin" },
   };
-  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "etc"};
+  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "etc", "tmp"};
   int pipefd[2];
   pid_t pid;
   char v;
@@ -140,6 +140,9 @@ main (int argc,
     fail ("mkdir usr");
 
   if (mkdir ("etc", 0755) != 0)
+    fail ("mkdir etc");
+
+  if (mkdir ("tmp", 0755) != 0)
     fail ("mkdir etc");
 
   if (mount (argv[1], "usr",
