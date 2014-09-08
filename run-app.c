@@ -65,7 +65,7 @@ main (int argc,
     { "bin", "usr/bin" },
     { "sbin", "usr/sbin" },
   };
-  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot"};
+  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "etc"};
   int pipefd[2];
   pid_t pid;
   char v;
@@ -139,13 +139,15 @@ main (int argc,
   if (mkdir ("usr", 0755) != 0)
     fail ("mkdir usr");
 
+  if (mkdir ("etc", 0755) != 0)
+    fail ("mkdir etc");
+
   if (mount (argv[1], "usr",
              NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
     fail ("mount usr");
 
   /* Its now mounted private inside the namespace, tell child process to unmount it in the parent namespace. */
   v = 1;
-  printf("wake child\n");
   write (pipefd[1], &v, 1);
   close (pipefd[WRITE_END]);
 
