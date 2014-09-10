@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <dirent.h>
+#include <signal.h>
 
 
 #if 0
@@ -37,12 +38,11 @@ fail (char *str)
 }
 
 void
-oom ()
+usage (char **argv)
 {
-  fprintf (stderr, "Out of memory.\n");
+  fprintf (stderr, "usage: %s [-a <path to app>] <path to runtime> <command..>", argv[0]);
   exit (1);
 }
-
 
 int
 main (int argc,
@@ -61,22 +61,53 @@ main (int argc,
   char buf[1024];
   DIR *dir;
   struct dirent *dirent;
+  struct { char *name;  mode_t mode; } dirs[] = {
+    { "usr", 0755 },
+    { "tmp", 01777 },
+    { "self", 0755},
+  };
   struct { char *path;  char *target; } symlinks[] = {
     { "lib", "usr/lib" },
     { "bin", "usr/bin" },
     { "sbin", "usr/sbin"},
     { "etc", "usr/etc"},
   };
-  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "tmp", "etc"};
+  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "tmp", "etc", "self"};
   int pipefd[2];
   pid_t pid;
   char v;
+  char *runtime_path = NULL;
+  char *app_path = NULL;
+  char **args;
+  int n_args;
 
-  if (argc < 3)
+  args = &argv[1];
+  n_args = argc - 1;
+
+  while (n_args > 0 && args[0][0] == '-')
     {
-      fprintf (stderr, "Too few arguments, need runtime and binary\n");
-      return 1;
+      switch (args[0][1])
+        {
+        case 'a':
+          if (n_args < 2)
+              usage (argv);
+
+          app_path = args[1];
+          args += 2;
+          n_args -= 2;
+          break;
+
+        default:
+          usage (argv);
+        }
     }
+
+  if (n_args < 2)
+    usage (argv);
+
+  runtime_path = args[0];
+  args++;
+  n_args--;
 
   /* The initial code is run with a high permission euid
      (at least CAP_SYS_ADMIN), so take lots of care. */
@@ -97,19 +128,22 @@ main (int argc,
     fail ("fork failed");
 
   /* When mounted private in child, make sure its not mounted in the parent,
-   * in case /tmp is mounted shared */
+   * in case /tmp is mounted shared, or of we exit on error */
   if (pid == 0)
     {
       char c;
       int r;
 
       /* In child */
-
       close (pipefd[WRITE_END]);
 
+      /* Don't die when the parent closes pipe */
+      signal (SIGPIPE, SIG_IGN);
+
       /* Wait for parent */
-      if (read (pipefd[READ_END], &c, 1) == 1)
-        umount2 (tmpdir, MNT_DETACH);
+      read (pipefd[READ_END], &c, 1);
+
+      umount2 (tmpdir, MNT_DETACH);
 
       exit (0);
     }
@@ -132,7 +166,6 @@ main (int argc,
              NULL, MS_REC|MS_PRIVATE, NULL) != 0)
     {
       perror ("Failed to make private");
-      umount (tmpdir);
 
       exit (1);
     }
@@ -140,26 +173,39 @@ main (int argc,
   if (chdir (tmpdir) != 0)
       fail ("chdir");
 
-  if (mkdir ("usr", 0755) != 0)
-    fail ("mkdir usr");
-
-  if (mkdir ("tmp", 01777) != 0)
-    fail ("mkdir tmp");
-
-  if (mount (argv[1], "usr",
-             NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
-    fail ("mount usr");
-
-  /* Its now mounted private inside the namespace, tell child process to unmount it in the parent namespace. */
-  v = 1;
-  write (pipefd[1], &v, 1);
-  close (pipefd[WRITE_END]);
+  for (i = 0; i < N_ELEMENTS(dirs); i++)
+    {
+      if (mkdir (dirs[i].name, dirs[i].mode) != 0)
+        fail ("dirs");
+    }
 
   for (i = 0; i < N_ELEMENTS(symlinks); i++)
     {
       if (symlink (symlinks[i].target, symlinks[i].path) != 0)
         fail ("symlinks");
     }
+
+  if (mount (runtime_path, "usr",
+             NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+    fail ("mount usr");
+
+  if (mount ("usr", "usr",
+             NULL, MS_REC|MS_PRIVATE, NULL) != 0)
+    fail ("mount usr private");
+
+  if (app_path != NULL)
+    {
+      if (mount (app_path, "self",
+                 NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+        fail ("mount self");
+
+      if (mount ("self", "self",
+                 NULL, MS_REC|MS_PRIVATE, NULL) != 0)
+        fail ("mount self private");
+    }
+
+  /* /usr now mounted private inside the namespace, tell child process to unmount the tmpfs in the parent namespace. */
+  close (pipefd[WRITE_END]);
 
   if (mount ("/etc/passwd", "etc/passwd",
              NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
@@ -216,19 +262,8 @@ main (int argc,
   /* Now we have everything we need CAP_SYS_ADMIN for, so drop setuid */
   setuid (getuid ());
 
-  executable = argv[2];
-  argv_offset = 3;
-
-  child_argv = malloc ((1 + argc - argv_offset + 1) * sizeof (char *));
-  if (child_argv == NULL)
-    oom();
-
-  j = 0;
-  child_argv[j++] = argv[0];
-  for (i = argv_offset; i < argc; i++)
-    child_argv[j++] = argv[i];
-  child_argv[j++] = NULL;
+  executable = args[0];
 
   __debug__(("launch executable %s\n", executable));
-  return execvp (executable, child_argv);
+  return execvp (executable, args);
 }
