@@ -72,6 +72,7 @@ main (int argc,
   char *app_path = NULL;
   char **args;
   int n_args;
+  char old_cwd[256];
 
   args = &argv[1];
   n_args = argc - 1;
@@ -160,6 +161,8 @@ main (int argc,
 
       exit (1);
     }
+
+  getcwd (old_cwd, sizeof (old_cwd));
 
   if (chdir (tmpdir) != 0)
       fail ("chdir");
@@ -252,6 +255,8 @@ main (int argc,
 
   /* Now we have everything we need CAP_SYS_ADMIN for, so drop setuid */
   setuid (getuid ());
+
+  chdir (old_cwd);
 
   setenv ("PATH", "/self/bin:/usr/bin", 1);
   setenv ("LD_LIBRARY_PATH", "/self/lib", 1);
