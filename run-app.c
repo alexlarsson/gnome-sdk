@@ -49,16 +49,9 @@ main (int argc,
       char **argv)
 {
   int res;
-  char *executable;
-  char **child_argv;
-  int i, j, fd, argv_offset;
-  int mounted_tmpfs = 0;
-  struct loop_info64 loopinfo;
-  int loop_fd = -1;
-  long offset;
+  int i;
   mode_t old_umask;
   char tmpdir[] = "/tmp/run-app.XXXXXX";
-  char buf[1024];
   DIR *dir;
   struct dirent *dirent;
   struct { char *name;  mode_t mode; } dirs[] = {
@@ -75,7 +68,6 @@ main (int argc,
   char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "tmp", "etc", "self"};
   int pipefd[2];
   pid_t pid;
-  char v;
   char *runtime_path = NULL;
   char *app_path = NULL;
   char **args;
@@ -132,7 +124,6 @@ main (int argc,
   if (pid == 0)
     {
       char c;
-      int r;
 
       /* In child */
       close (pipefd[WRITE_END]);
@@ -219,7 +210,7 @@ main (int argc,
   dir = opendir("/");
   if (dir != NULL)
     {
-      while (dirent = readdir(dir))
+      while ((dirent = readdir(dir)))
         {
           int dont_mount = 0;
           char path[1024];
@@ -262,8 +253,12 @@ main (int argc,
   /* Now we have everything we need CAP_SYS_ADMIN for, so drop setuid */
   setuid (getuid ());
 
-  executable = args[0];
+  setenv ("PATH", "/self/bin:/usr/bin", 1);
+  setenv ("LD_LIBRARY_PATH", "/self/lib", 1);
+  setenv ("XDG_CONFIG_DIRS","/self/etc/xdg:/etc/xdg", 1);
+  setenv ("XDG_DATA_DIRS", "/self/share:/usr/share", 1);
 
-  __debug__(("launch executable %s\n", executable));
-  return execvp (executable, args);
+  __debug__(("launch executable %s\n", args[0]));
+
+  return execvp (args[0], args);
 }
