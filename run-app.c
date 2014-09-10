@@ -56,6 +56,7 @@ main (int argc,
   struct loop_info64 loopinfo;
   int loop_fd = -1;
   long offset;
+  mode_t old_umask;
   char tmpdir[] = "/tmp/run-app.XXXXXX";
   char buf[1024];
   DIR *dir;
@@ -63,9 +64,10 @@ main (int argc,
   struct { char *path;  char *target; } symlinks[] = {
     { "lib", "usr/lib" },
     { "bin", "usr/bin" },
-    { "sbin", "usr/sbin" },
+    { "sbin", "usr/sbin"},
+    { "etc", "usr/etc"},
   };
-  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "etc", "tmp"};
+  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "tmp", "etc"};
   int pipefd[2];
   pid_t pid;
   char v;
@@ -119,6 +121,8 @@ main (int argc,
   if (res != 0)
     fail ("Creating new namespace failed");
 
+  old_umask = umask (0);
+
   /* Create a tmpfs which we will use as / in the namespace */
   if (mount ("", tmpdir, "tmpfs", MS_NODEV|MS_NOEXEC, NULL) != 0)
     fail ("Failed to mount tmpfs");
@@ -139,11 +143,8 @@ main (int argc,
   if (mkdir ("usr", 0755) != 0)
     fail ("mkdir usr");
 
-  if (mkdir ("etc", 0755) != 0)
-    fail ("mkdir etc");
-
-  if (mkdir ("tmp", 0755) != 0)
-    fail ("mkdir etc");
+  if (mkdir ("tmp", 01777) != 0)
+    fail ("mkdir tmp");
 
   if (mount (argv[1], "usr",
              NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
@@ -159,6 +160,14 @@ main (int argc,
       if (symlink (symlinks[i].target, symlinks[i].path) != 0)
         fail ("symlinks");
     }
+
+  if (mount ("/etc/passwd", "etc/passwd",
+             NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+    fail ("mount passwd");
+
+  if (mount ("/etc/group", "etc/group",
+             NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+    fail ("mount group");
 
   /* Bind mount most dirs in / into the new root */
   dir = opendir("/");
@@ -194,13 +203,15 @@ main (int argc,
                 fail (dirent->d_name);
 
               if (mount (path, dirent->d_name,
-                         NULL, MS_BIND|MS_MGC_VAL|MS_NOSUID, NULL) != 0)
+                         NULL, MS_BIND|MS_REC|MS_MGC_VAL|MS_NOSUID, NULL) != 0)
                 fail ("mount root subdir");
             }
         }
     }
 
   chroot (tmpdir);
+
+  umask (old_umask);
 
   /* Now we have everything we need CAP_SYS_ADMIN for, so drop setuid */
   setuid (getuid ());
