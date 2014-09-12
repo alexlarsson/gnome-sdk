@@ -1,0 +1,95 @@
+#!/bin/sh
+
+XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+DATA_DIR=$XDG_DATA_HOME/gnome-sdk
+
+show_help() {
+cat << EOF
+Usage: ${0##*/} [-p] [-r RUNTIME] [-a APP] <command> [arguments...]
+Runs a command in the gnome sdk runtime.
+
+    -h              show this help
+    -p, --platform  run with default application platform runtime rather than the sdk
+    -r, --runtime   run with a specific runtime
+    -a, --app       run with the specified app in /self
+
+All runtimes are stored in ${DATA_DIR}.
+The default sdk is called 'sdk' and can be changed by setting GNOME_SDK_DEVEL_RUNTIME.
+The default platform is called 'platform' and can be changed by setting GNOME_SDK_APP_RUNTIME.
+The default app is called 'defaultapp' and can be changed by setting GNOME_SDK_APP.
+EOF
+}
+
+if [ "$#" == "0" ]; then
+    show_help
+    exit 1
+fi
+
+APP=${GNOME_SDK_APP:-defaultapp}
+SDK=${GNOME_SDK_DEVEL_RUNTIME:-sdk}
+PLATFORM=${GNOME_SDK_APP_RUNTIME:-platform}
+RUNTIME=$SDK
+
+while :; do
+    case $1 in
+        -h|-\?|--help)
+            show_help
+            exit
+            ;;
+        -r|--runtime)
+            if [ "$2" ]; then
+                RUNTIME=$2
+                shift 2
+                continue
+            else
+                echo 'ERROR: Must specify a non-empty "--runtime RUNTIME" argument.' >&2
+                exit 1
+            fi
+            ;;
+        -a|--app)
+            if [ "$2" ]; then
+                APP=$2
+                shift 2
+                continue
+            else
+                echo 'ERROR: Must specify a non-empty "--app APP" argument.' >&2
+                exit 1
+            fi
+            ;;
+        -p|--platform)
+            RUNTIME=$PLATFORM
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -?*)
+            printf 'Warning: Unknown option (ignored): %s\n' "$1" >&2
+            ;;
+        *)
+            break
+    esac
+
+    shift
+done
+
+declare -x ACLOCAL_PATH="/self/share/aclocal"
+declare -x CPLUS_INCLUDE_PATH="/self/include"
+declare -x C_INCLUDE_PATH="/self/include"
+declare -x GI_TYPELIB_PATH="/self/lib/girepository-1.0"
+declare -x LDFLAGS="-L/self/lib "
+declare -x PKG_CONFIG_PATH="/self/lib/pkgconfig:/self/share/pkgconfig"
+
+mkdir -p $DATA_DIR
+
+RUNTIME_DIR=$DATA_DIR/$RUNTIME
+
+if ! test -d $RUNTIME_DIR; then
+    echo "Error: Runtime '$RUNTIME' does not exist at $RUNTIME_DIR"
+    exit 1
+fi
+
+APP_DIR=$DATA_DIR/$APP
+mkdir -p $APP_DIR
+
+gnome-sdk-helper -a $APP_DIR $RUNTIME_DIR "$@"

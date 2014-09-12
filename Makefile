@@ -1,4 +1,11 @@
-run-app: run-app.c
-	gcc -o run-app run-app.c -O -Wall
-	chown root.root run-app
-	chmod u+s run-app
+PREFIX ?= /usr
+BINDIR ?= ${PREFIX}/bin
+
+all: gnome-sdk-helper
+
+gnome-sdk-helper: gnome-sdk-helper.c
+	gcc -o gnome-sdk-helper gnome-sdk-helper.c -O -Wall
+
+install: gnome-sdk-helper gnome-sdk
+	install -D --mode=4755 --owner=root gnome-sdk-helper ${DESTDIR}${BINDIR}
+	install -D gnome-sdk ${DESTDIR}${BINDIR}

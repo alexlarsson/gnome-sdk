@@ -40,7 +40,7 @@ fail (char *str)
 void
 usage (char **argv)
 {
-  fprintf (stderr, "usage: %s [-a <path to app>] <path to runtime> <command..>", argv[0]);
+  fprintf (stderr, "usage: %s [-a <path to app>] <path to runtime> <command..>\n", argv[0]);
   exit (1);
 }
 
