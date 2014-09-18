@@ -113,13 +113,20 @@ main (int argc,
     { ".oldroot", 0755 },
     { "usr", 0755 },
     { "tmp", 01777 },
+    { "tmp/.X11-unix", 0755 },
     { "self", 0755},
+  };
+  struct { char *name;  mode_t mode; } files[] = {
+    { "tmp/.X11-unix/X0", 0755 },
   };
   struct { char *path;  char *target; } symlinks[] = {
     { "lib", "usr/lib" },
     { "bin", "usr/bin" },
     { "sbin", "usr/sbin"},
     { "etc", "usr/etc"},
+  };
+  struct { char *path;  char *target; } bindmounts[] = {
+    { "/tmp/.X11-unix/X0", "tmp/.X11-unix/X0" },
   };
   char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "tmp", "etc", "self"};
   int pipefd[2];
@@ -248,10 +255,25 @@ main (int argc,
         fail ("dirs");
     }
 
+  for (i = 0; i < N_ELEMENTS(files); i++)
+    {
+      int fd = creat (files[i].name, files[i].mode);
+      if (fd == -1)
+        fail ("files");
+      close (fd);
+    }
+
   for (i = 0; i < N_ELEMENTS(symlinks); i++)
     {
       if (symlink (symlinks[i].target, symlinks[i].path) != 0)
         fail ("symlinks");
+    }
+
+  for (i = 0; i < N_ELEMENTS(bindmounts); i++)
+    {
+      if (mount (bindmounts[i].path, bindmounts[i].target,
+                 NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
+        fail ("bindmounts");
     }
 
   if (mount (runtime_path, "usr",
