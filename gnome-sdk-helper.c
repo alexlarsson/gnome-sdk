@@ -2,6 +2,7 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/syscall.h>
 #include <fcntl.h>
 #include <linux/loop.h>
 #include <sched.h>
@@ -12,7 +13,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <signal.h>
-
+#include <stdarg.h>
 
 #if 0
 #define __debug__(x) printf x
@@ -37,11 +38,64 @@ fail (char *str)
   exit (1);
 }
 
+static void
+die (const char *format, ...)
+{
+  va_list args;
+
+  va_start (args, format);
+  vfprintf (stderr, format, args);
+  va_end (args);
+  exit (1);
+}
+
+static void *
+xmalloc (size_t size)
+{
+  void *res = malloc (size);
+  if (res == NULL)
+    die ("oom");
+  return res;
+}
+
+char *
+strconcat (const char *s1,
+           const char *s2)
+{
+  size_t len = 0;
+  char *res;
+
+  if (s1)
+    len += strlen (s1);
+  if (s2)
+    len += strlen (s2);
+
+  res = xmalloc (len + 1);
+  *res = 0;
+  if (s1)
+    strcat (res, s1);
+  if (s2)
+    strcat (res, s2);
+
+  return res;
+}
+
 void
 usage (char **argv)
 {
   fprintf (stderr, "usage: %s [-a <path to app>] <path to runtime> <command..>\n", argv[0]);
   exit (1);
+}
+
+static int
+pivot_root (const char * new_root, const char * put_old)
+{
+#ifdef __NR_pivot_root
+  return syscall(__NR_pivot_root, new_root, put_old);
+#else
+  errno = ENOSYS;
+  return -1;
+#endif
 }
 
 int
@@ -52,9 +106,11 @@ main (int argc,
   int i;
   mode_t old_umask;
   char tmpdir[] = "/tmp/run-app.XXXXXX";
+  char *newroot;
   DIR *dir;
   struct dirent *dirent;
   struct { char *name;  mode_t mode; } dirs[] = {
+    { ".oldroot", 0755 },
     { "usr", 0755 },
     { "tmp", 01777 },
     { "self", 0755},
@@ -67,6 +123,7 @@ main (int argc,
   };
   char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "tmp", "etc", "self"};
   int pipefd[2];
+  uid_t saved_euid;
   pid_t pid;
   char *runtime_path = NULL;
   char *app_path = NULL;
@@ -105,13 +162,35 @@ main (int argc,
   /* The initial code is run with a high permission euid
      (at least CAP_SYS_ADMIN), so take lots of care. */
 
-  __debug__(("Createing tmp dir\n"));
+  __debug__(("Creating temporary dir\n"));
+
+  saved_euid = geteuid ();
+
+  /* First switch to the real user id so we can have the
+     temp directories owned by the user */
+
+  if (seteuid (getuid ()))
+    fail ("seteuid to user");
 
   if (mkdtemp (tmpdir) == NULL)
     fail ("Creating temporary directory failed");
 
-  if (chown (tmpdir, getuid (), getuid ()) != 0)
-      fail ("Chowning temporary directory failed");
+  newroot = strconcat (tmpdir, "/root");
+
+  if (mkdir (newroot, 0755))
+    fail ("Creating new root failed");
+
+  /* Now switch back to the root user */
+  if (seteuid (saved_euid))
+    fail ("seteuid to privileged");
+
+  /* We want to make the temp directory a bind mount so that
+     we can ensure that it is MS_PRIVATE, so mount don't leak out
+     of the namespace, and also so that pivot_root() succeeds. However
+     this means if /tmp is MS_SHARED the bind-mount will be propagated
+     to the parent namespace. In order to handle this we spawn a child
+     in the original namespace and unmount the bind mount from that at
+     the right time. */
 
   if (pipe (pipefd) != 0)
     fail ("pipe failed");
@@ -120,8 +199,6 @@ main (int argc,
   if (pid == -1)
     fail ("fork failed");
 
-  /* When mounted private in child, make sure its not mounted in the parent,
-   * in case /tmp is mounted shared, or of we exit on error */
   if (pid == 0)
     {
       char c;
@@ -135,6 +212,7 @@ main (int argc,
       /* Wait for parent */
       read (pipefd[READ_END], &c, 1);
 
+      /* Unmount tmpdir bind mount */
       umount2 (tmpdir, MNT_DETACH);
 
       exit (0);
@@ -149,22 +227,19 @@ main (int argc,
 
   old_umask = umask (0);
 
+  /* make it tmpdir rprivate to avoid leaking mounts */
+  if (mount (tmpdir, tmpdir, NULL, MS_BIND, NULL) != 0)
+    fail ("Failed to make bind mount on tmpdir");
+  if (mount (tmpdir, tmpdir, NULL, MS_REC|MS_PRIVATE, NULL) != 0)
+    fail ("Failed to make tmpdir rprivate");
+
   /* Create a tmpfs which we will use as / in the namespace */
-  if (mount ("", tmpdir, "tmpfs", MS_NODEV|MS_NOEXEC, NULL) != 0)
+  if (mount ("", newroot, "tmpfs", MS_NODEV|MS_NOEXEC, NULL) != 0)
     fail ("Failed to mount tmpfs");
-
-  /* make it rprivate so the parent namespace can't see it */
-  if (mount (tmpdir, tmpdir,
-             NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-    {
-      perror ("Failed to make private");
-
-      exit (1);
-    }
 
   getcwd (old_cwd, sizeof (old_cwd));
 
-  if (chdir (tmpdir) != 0)
+  if (chdir (newroot) != 0)
       fail ("chdir");
 
   for (i = 0; i < N_ELEMENTS(dirs); i++)
@@ -180,22 +255,30 @@ main (int argc,
     }
 
   if (mount (runtime_path, "usr",
-             NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+             NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
     fail ("mount usr");
 
-  if (mount ("usr", "usr",
+  if (mount ("none", "usr",
              NULL, MS_REC|MS_PRIVATE, NULL) != 0)
     fail ("mount usr private");
+
+  if (mount ("none", "usr",
+             NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+    fail ("mount usr readonly");
 
   if (app_path != NULL)
     {
       if (mount (app_path, "self",
-                 NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+                 NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
         fail ("mount self");
 
-      if (mount ("self", "self",
+      if (mount ("none", "self",
                  NULL, MS_REC|MS_PRIVATE, NULL) != 0)
         fail ("mount self private");
+
+      if (mount ("none", "self",
+                 NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+        fail ("mount self readonly");
     }
 
   /* /usr now mounted private inside the namespace, tell child process to unmount the tmpfs in the parent namespace. */
@@ -216,7 +299,7 @@ main (int argc,
       while ((dirent = readdir(dir)))
         {
           int dont_mount = 0;
-          char path[1024];
+          char *path;
           struct stat st;
 
           for (i = 0; i < N_ELEMENTS(dont_mounts); i++)
@@ -231,11 +314,13 @@ main (int argc,
           if (dont_mount)
             continue;
 
-          strcpy (path, "/");
-          strncat (path, dirent->d_name, sizeof(path));
+          path = strconcat ("/", dirent->d_name);
 
           if (stat (path, &st) != 0)
-            continue;
+            {
+              free (path);
+              continue;
+            }
 
           if (S_ISDIR(st.st_mode))
             {
@@ -246,10 +331,22 @@ main (int argc,
                          NULL, MS_BIND|MS_REC|MS_MGC_VAL|MS_NOSUID, NULL) != 0)
                 fail ("mount root subdir");
             }
+
+          free (path);
         }
     }
 
-  chroot (tmpdir);
+  if (pivot_root (newroot, ".oldroot"))
+    fail ("pivot_root");
+
+  chdir ("/");
+
+  /* The old root better be rprivate or we will send unmount events to the parent namespace */
+  if (mount (".oldroot", ".oldroot", NULL, MS_REC|MS_PRIVATE, NULL) != 0)
+    fail ("Failed to make old root rprivate");
+
+  if (umount2 (".oldroot", MNT_DETACH))
+    fail ("unmount oldroot");
 
   umask (old_umask);
 
