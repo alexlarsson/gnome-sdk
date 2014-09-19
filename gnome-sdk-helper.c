@@ -241,7 +241,7 @@ main (int argc,
     fail ("Failed to make tmpdir rprivate");
 
   /* Create a tmpfs which we will use as / in the namespace */
-  if (mount ("", newroot, "tmpfs", MS_NODEV|MS_NOEXEC, NULL) != 0)
+  if (mount ("", newroot, "tmpfs", MS_NODEV|MS_NOEXEC|MS_NOSUID, NULL) != 0)
     fail ("Failed to mount tmpfs");
 
   getcwd (old_cwd, sizeof (old_cwd));
