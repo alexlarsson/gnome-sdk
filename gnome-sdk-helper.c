@@ -21,18 +21,25 @@
 #define __debug__(x)
 #endif
 
-#ifndef MS_PRIVATE      /* May not be defined in older glibc headers */
-#define MS_PRIVATE (1<<18) /* change to private */
-#endif
-
 #define N_ELEMENTS(arr)		(sizeof (arr) / sizeof ((arr)[0]))
+
 #define READ_END 0
 #define WRITE_END 1
 
-void
-fail (char *str)
+static void
+die_with_error (const char *format, ...)
 {
-  perror (str);
+  va_list args;
+  int errsv;
+
+  errsv = errno;
+
+  va_start (args, format);
+  vfprintf (stderr, format, args);
+  va_end (args);
+
+  fprintf (stderr, ": %s\n", strerror (errsv));
+
   exit (1);
 }
 
@@ -44,6 +51,9 @@ die (const char *format, ...)
   va_start (args, format);
   vfprintf (stderr, format, args);
   va_end (args);
+
+  fprintf (stderr, "\n");
+
   exit (1);
 }
 
@@ -94,7 +104,6 @@ strdup_printf (const char *format,
 
   return buffer;
 }
-
 
 void
 usage (char **argv)
@@ -248,19 +257,19 @@ main (int argc,
      temp directories owned by the user */
 
   if (seteuid (getuid ()))
-    fail ("seteuid to user");
+    die_with_error ("seteuid to user");
 
   if (mkdtemp (tmpdir) == NULL)
-    fail ("Creating temporary directory failed");
+    die_with_error ("Creating %s", tmpdir);
 
   newroot = strconcat (tmpdir, "/root");
 
   if (mkdir (newroot, 0755))
-    fail ("Creating new root failed");
+    die_with_error ("Creating new root failed");
 
   /* Now switch back to the root user */
   if (seteuid (saved_euid))
-    fail ("seteuid to privileged");
+    die_with_error ("seteuid to privileged");
 
   /* We want to make the temp directory a bind mount so that
      we can ensure that it is MS_PRIVATE, so mount don't leak out
@@ -271,11 +280,11 @@ main (int argc,
      the right time. */
 
   if (pipe (pipefd) != 0)
-    fail ("pipe failed");
+    die_with_error ("pipe failed");
 
   pid = fork();
   if (pid == -1)
-    fail ("fork failed");
+    die_with_error ("fork failed");
 
   if (pid == 0)
     {
@@ -301,24 +310,24 @@ main (int argc,
   __debug__(("creating new namespace\n"));
   res = unshare (CLONE_NEWNS);
   if (res != 0)
-    fail ("Creating new namespace failed");
+    die_with_error ("Creating new namespace failed");
 
   old_umask = umask (0);
 
   /* make it tmpdir rprivate to avoid leaking mounts */
   if (mount (tmpdir, tmpdir, NULL, MS_BIND, NULL) != 0)
-    fail ("Failed to make bind mount on tmpdir");
+    die_with_error ("Failed to make bind mount on tmpdir");
   if (mount (tmpdir, tmpdir, NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-    fail ("Failed to make tmpdir rprivate");
+    die_with_error ("Failed to make tmpdir rprivate");
 
   /* Create a tmpfs which we will use as / in the namespace */
   if (mount ("", newroot, "tmpfs", MS_NODEV|MS_NOEXEC|MS_NOSUID, NULL) != 0)
-    fail ("Failed to mount tmpfs");
+    die_with_error ("Failed to mount tmpfs");
 
   getcwd (old_cwd, sizeof (old_cwd));
 
   if (chdir (newroot) != 0)
-      fail ("chdir");
+      die_with_error ("chdir");
 
   for (i = 0; i < N_ELEMENTS(create); i++)
     {
@@ -335,24 +344,24 @@ main (int argc,
         {
         case FILE_TYPE_DIR:
           if (mkdir (name, mode) != 0)
-            fail ("dir");
+            die_with_error ("creating dir %s", name);
           break;
 
         case FILE_TYPE_REGULAR:
           fd = creat (name, mode);
           if (fd == -1)
-            fail ("files");
+            die_with_error ("creating file %s", name);
           close (fd);
           break;
 
         case FILE_TYPE_SYMLINK:
           if (symlink (data, name) != 0)
-            fail ("symlink");
+            die_with_error ("creating symlink %s", name);
           break;
 
         case FILE_TYPE_BIND:
           if (mount (data, name, NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
-            fail ("bindmount");
+            die_with_error ("mounting bindmount %s", name);
           break;
 
         case FILE_TYPE_MOUNT:
@@ -366,7 +375,7 @@ main (int argc,
                             mount_table[k].type,
                             mount_table[k].flags,
                             mount_table[k].options) < 0)
-                    fail("Standard mount");
+                    die_with_error ("Mounting %s", name);
                   found = 1;
                 }
             }
@@ -378,13 +387,13 @@ main (int argc,
 
         case FILE_TYPE_DEVICE:
           if (stat (data, &st) < 0)
-            fail ("stat node");
+            die_with_error ("stat node %s", data);
 
           if (!S_ISCHR (st.st_mode) && !S_ISBLK (st.st_mode))
-            fail ("node is not a device");
+            die_with_error ("node %s is not a device", data);
 
           if (mknod (name, mode, st.st_rdev) < 0)
-            fail ("mknod");
+            die_with_error ("mknod %s", name);
 
           break;
 
@@ -395,7 +404,7 @@ main (int argc,
       if (flags & FILE_FLAGS_USER_OWNED)
         {
           if (chown (name, getuid(), -1))
-            fail ("chown to user");
+            die_with_error ("chown to user");
         }
 
       free (name);
@@ -403,29 +412,29 @@ main (int argc,
 
   if (mount (runtime_path, "usr",
              NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
-    fail ("mount usr");
+    die_with_error ("mount usr");
 
   if (mount ("none", "usr",
              NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-    fail ("mount usr private");
+    die_with_error ("mount usr private");
 
   if (mount ("none", "usr",
              NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
-    fail ("mount usr readonly");
+    die_with_error ("mount usr readonly");
 
   if (app_path != NULL)
     {
       if (mount (app_path, "self",
                  NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
-        fail ("mount self");
+        die_with_error ("mount self");
 
       if (mount ("none", "self",
                  NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-        fail ("mount self private");
+        die_with_error ("mount self private");
 
       if (mount ("none", "self",
                  NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
-        fail ("mount self readonly");
+        die_with_error ("mount self readonly");
     }
 
   /* /usr now mounted private inside the namespace, tell child process to unmount the tmpfs in the parent namespace. */
@@ -433,11 +442,11 @@ main (int argc,
 
   if (mount ("/etc/passwd", "etc/passwd",
              NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
-    fail ("mount passwd");
+    die_with_error ("mount passwd");
 
   if (mount ("/etc/group", "etc/group",
              NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
-    fail ("mount group");
+    die_with_error ("mount group");
 
   /* Bind mount most dirs in / into the new root */
   dir = opendir("/");
@@ -472,11 +481,11 @@ main (int argc,
           if (S_ISDIR(st.st_mode))
             {
               if (mkdir (dirent->d_name, 0755) != 0)
-                fail (dirent->d_name);
+                die_with_error (dirent->d_name);
 
               if (mount (path, dirent->d_name,
                          NULL, MS_BIND|MS_REC|MS_MGC_VAL|MS_NOSUID, NULL) != 0)
-                fail ("mount root subdir");
+                die_with_error ("mount root subdir %s", dirent->d_name);
             }
 
           free (path);
@@ -484,16 +493,16 @@ main (int argc,
     }
 
   if (pivot_root (newroot, ".oldroot"))
-    fail ("pivot_root");
+    die_with_error ("pivot_root");
 
   chdir ("/");
 
   /* The old root better be rprivate or we will send unmount events to the parent namespace */
   if (mount (".oldroot", ".oldroot", NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-    fail ("Failed to make old root rprivate");
+    die_with_error ("Failed to make old root rprivate");
 
   if (umount2 (".oldroot", MNT_DETACH))
-    fail ("unmount oldroot");
+    die_with_error ("unmount oldroot");
 
   umask (old_umask);
 
