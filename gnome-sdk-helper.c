@@ -128,6 +128,7 @@ typedef enum {
   FILE_TYPE_DIR,
   FILE_TYPE_SYMLINK,
   FILE_TYPE_BIND,
+  FILE_TYPE_BIND_RO,
   FILE_TYPE_MOUNT,
   FILE_TYPE_DEVICE,
 } file_type_t;
@@ -180,7 +181,7 @@ main (int argc,
     { FILE_TYPE_BIND, "tmp/.X11-unix/X0", 0755, "/tmp/.X11-unix/X0"},
     { FILE_TYPE_DIR, "proc", 0755},
     { FILE_TYPE_MOUNT, "proc"},
-    { FILE_TYPE_MOUNT, "proc/sys"},
+    { FILE_TYPE_BIND_RO, "proc/sys", 0755, "proc/sys"},
     { FILE_TYPE_DIR, "sys", 0755},
     { FILE_TYPE_MOUNT, "sys"},
     { FILE_TYPE_DIR, "dev", 0755},
@@ -205,8 +206,6 @@ main (int argc,
     unsigned long flags;
   }  mount_table[] = {
     { "proc",      "proc",     "proc",  NULL,        MS_NOSUID|MS_NOEXEC|MS_NODEV           },
-    { "proc/sys",  "proc/sys", NULL,    NULL,        MS_BIND                                },   /* Bind mount first */
-    { NULL,        "proc/sys", NULL,    NULL,        MS_BIND|MS_RDONLY|MS_REMOUNT           },   /* Then, make it r/o */
     { "sysfs",     "sys",      "sysfs", NULL,        MS_RDONLY|MS_NOSUID|MS_NOEXEC|MS_NODEV },
     { "tmpfs",     "dev",      "tmpfs", "mode=755",  MS_NOSUID|MS_STRICTATIME               },
     { "devpts",    "dev/pts",  "devpts","newinstance,ptmxmode=0666,mode=620,gid=5", MS_NOSUID|MS_NOEXEC },
@@ -360,8 +359,17 @@ main (int argc,
           break;
 
         case FILE_TYPE_BIND:
+        case FILE_TYPE_BIND_RO:
           if (mount (data, name, NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
             die_with_error ("mounting bindmount %s", name);
+
+          if (create[i].type == FILE_TYPE_BIND_RO)
+            {
+              if (mount ("none", name,
+                         NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY, NULL) != 0)
+                die_with_error ("making bindmount %s readonly", name);
+            }
+
           break;
 
         case FILE_TYPE_MOUNT:
