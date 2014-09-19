@@ -25,8 +25,6 @@
 #define MS_PRIVATE (1<<18) /* change to private */
 #endif
 
-#define RUNTIME_PREFIX "/usr"
-
 #define N_ELEMENTS(arr)		(sizeof (arr) / sizeof ((arr)[0]))
 #define READ_END 0
 #define WRITE_END 1
@@ -121,6 +119,8 @@ typedef enum {
   FILE_TYPE_DIR,
   FILE_TYPE_SYMLINK,
   FILE_TYPE_BIND,
+  FILE_TYPE_MOUNT,
+  FILE_TYPE_DEVICE,
 } file_type_t;
 
 typedef enum {
@@ -148,7 +148,13 @@ main (int argc,
   char old_cwd[256];
 
   char tmpdir[] = "/tmp/run-app.XXXXXX";
-  struct { file_type_t type; char *name;  mode_t mode; char *data; file_flags_t flags; } create[] = {
+  static const struct {
+    file_type_t type;
+    const char *name;
+    mode_t mode;
+    const char *data;
+    file_flags_t flags;
+  } create[] = {
     { FILE_TYPE_DIR, ".oldroot", 0755 },
     { FILE_TYPE_DIR, "usr", 0755 },
     { FILE_TYPE_DIR, "tmp", 01777 },
@@ -163,10 +169,44 @@ main (int argc,
     { FILE_TYPE_DIR, "tmp/.X11-unix", 0755 },
     { FILE_TYPE_REGULAR, "tmp/.X11-unix/X0", 0755 },
     { FILE_TYPE_BIND, "tmp/.X11-unix/X0", 0755, "/tmp/.X11-unix/X0"},
+    { FILE_TYPE_DIR, "proc", 0755},
+    { FILE_TYPE_MOUNT, "proc"},
+    { FILE_TYPE_MOUNT, "proc/sys"},
+    { FILE_TYPE_DIR, "sys", 0755},
+    { FILE_TYPE_MOUNT, "sys"},
+    { FILE_TYPE_DIR, "dev", 0755},
+    { FILE_TYPE_MOUNT, "dev"},
+    { FILE_TYPE_DIR, "dev/pts", 0755},
+    { FILE_TYPE_MOUNT, "dev/pts"},
+    { FILE_TYPE_DIR, "dev/shm", 0755},
+    { FILE_TYPE_MOUNT, "dev/shm"},
+    { FILE_TYPE_DEVICE, "dev/null", 0666, "/dev/null"},
+    { FILE_TYPE_DEVICE, "dev/zero", 0666, "/dev/zero"},
+    { FILE_TYPE_DEVICE, "dev/full", 0666, "/dev/full"},
+    { FILE_TYPE_DEVICE, "dev/random", 0666, "/dev/random"},
+    { FILE_TYPE_DEVICE, "dev/urandom", 0666, "/dev/urandom"},
+    { FILE_TYPE_DEVICE, "dev/tty", 0666, "/dev/tty"},
   };
+
+  static const struct {
+    const char *what;
+    const char *where;
+    const char *type;
+    const char *options;
+    unsigned long flags;
+  }  mount_table[] = {
+    { "proc",      "proc",     "proc",  NULL,        MS_NOSUID|MS_NOEXEC|MS_NODEV           },
+    { "proc/sys",  "proc/sys", NULL,    NULL,        MS_BIND                                },   /* Bind mount first */
+    { NULL,        "proc/sys", NULL,    NULL,        MS_BIND|MS_RDONLY|MS_REMOUNT           },   /* Then, make it r/o */
+    { "sysfs",     "sys",      "sysfs", NULL,        MS_RDONLY|MS_NOSUID|MS_NOEXEC|MS_NODEV },
+    { "tmpfs",     "dev",      "tmpfs", "mode=755",  MS_NOSUID|MS_STRICTATIME               },
+    { "devpts",    "dev/pts",  "devpts","newinstance,ptmxmode=0666,mode=620,gid=5", MS_NOSUID|MS_NOEXEC },
+    { "tmpfs",     "dev/shm",  "tmpfs", "mode=1777", MS_NOSUID|MS_NODEV|MS_STRICTATIME      },
+  };
+
   char *dont_mounts[] = {
     ".", "..", "lib", "lib64", "bin", "sbin", "usr", "boot",
-    "tmp", "etc", "self", "run",
+    "tmp", "etc", "self", "run", "proc", "sys", "dev",
   };
 
   args = &argv[1];
@@ -285,8 +325,11 @@ main (int argc,
       int fd;
       char *name = strdup_printf (create[i].name, getuid());
       mode_t mode = create[i].mode;
-      char *data = create[i].data;
+      const char *data = create[i].data;
       file_flags_t flags = create[i].flags;
+      struct stat st;
+      int k;
+      int found;
 
       switch (create[i].type)
         {
@@ -310,6 +353,39 @@ main (int argc,
         case FILE_TYPE_BIND:
           if (mount (data, name, NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
             fail ("bindmount");
+          break;
+
+        case FILE_TYPE_MOUNT:
+          found = 0;
+          for (k = 0; k < N_ELEMENTS(mount_table); k++)
+            {
+              if (strcmp (mount_table[k].where, name) == 0)
+                {
+                  if (mount(mount_table[k].what,
+                            mount_table[k].where,
+                            mount_table[k].type,
+                            mount_table[k].flags,
+                            mount_table[k].options) < 0)
+                    fail("Standard mount");
+                  found = 1;
+                }
+            }
+
+          if (!found)
+            die ("Unable to find mount %s\n", name);
+
+          break;
+
+        case FILE_TYPE_DEVICE:
+          if (stat (data, &st) < 0)
+            fail ("stat node");
+
+          if (!S_ISCHR (st.st_mode) && !S_ISBLK (st.st_mode))
+            fail ("node is not a device");
+
+          if (mknod (name, mode, st.st_rdev) < 0)
+            fail ("mknod");
+
           break;
 
         default:
