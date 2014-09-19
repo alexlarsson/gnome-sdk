@@ -80,6 +80,24 @@ strconcat (const char *s1,
   return res;
 }
 
+char*
+strdup_printf (const char *format,
+               ...)
+{
+  char *buffer = NULL;
+  va_list args;
+
+  va_start (args, format);
+  vasprintf (&buffer, format, args);
+  va_end (args);
+
+  if (buffer == NULL)
+    die ("oom");
+
+  return buffer;
+}
+
+
 void
 usage (char **argv)
 {
@@ -107,6 +125,7 @@ typedef enum {
 
 typedef enum {
   FILE_FLAGS_NONE = 0,
+  FILE_FLAGS_USER_OWNED = 1 << 0,
 } file_flags_t;
 
 int
@@ -134,6 +153,9 @@ main (int argc,
     { FILE_TYPE_DIR, "usr", 0755 },
     { FILE_TYPE_DIR, "tmp", 01777 },
     { FILE_TYPE_DIR, "self", 0755},
+    { FILE_TYPE_DIR, "run", 0755},
+    { FILE_TYPE_DIR, "run/user", 0755},
+    { FILE_TYPE_DIR, "run/user/%1$d", 0700, NULL, FILE_FLAGS_USER_OWNED },
     { FILE_TYPE_SYMLINK, "lib", 0755, "usr/lib"},
     { FILE_TYPE_SYMLINK, "bin", 0755, "usr/bin" },
     { FILE_TYPE_SYMLINK, "sbin", 0755, "usr/sbin"},
@@ -144,7 +166,7 @@ main (int argc,
   };
   char *dont_mounts[] = {
     ".", "..", "lib", "lib64", "bin", "sbin", "usr", "boot",
-    "tmp", "etc", "self",
+    "tmp", "etc", "self", "run",
   };
 
   args = &argv[1];
@@ -261,9 +283,10 @@ main (int argc,
   for (i = 0; i < N_ELEMENTS(create); i++)
     {
       int fd;
-      char *name = create[i].name;
+      char *name = strdup_printf (create[i].name, getuid());
       mode_t mode = create[i].mode;
       char *data = create[i].data;
+      file_flags_t flags = create[i].flags;
 
       switch (create[i].type)
         {
@@ -292,6 +315,14 @@ main (int argc,
         default:
           die ("Unknown create type %d\n", create[i].type);
         }
+
+      if (flags & FILE_FLAGS_USER_OWNED)
+        {
+          if (chown (name, getuid(), -1))
+            fail ("chown to user");
+        }
+
+      free (name);
     }
 
   if (mount (runtime_path, "usr",
