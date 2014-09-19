@@ -98,6 +98,17 @@ pivot_root (const char * new_root, const char * put_old)
 #endif
 }
 
+typedef enum {
+  FILE_TYPE_REGULAR,
+  FILE_TYPE_DIR,
+  FILE_TYPE_SYMLINK,
+  FILE_TYPE_BIND,
+} file_type_t;
+
+typedef enum {
+  FILE_FLAGS_NONE = 0,
+} file_flags_t;
+
 int
 main (int argc,
       char **argv)
@@ -105,30 +116,9 @@ main (int argc,
   int res;
   int i;
   mode_t old_umask;
-  char tmpdir[] = "/tmp/run-app.XXXXXX";
   char *newroot;
   DIR *dir;
   struct dirent *dirent;
-  struct { char *name;  mode_t mode; } dirs[] = {
-    { ".oldroot", 0755 },
-    { "usr", 0755 },
-    { "tmp", 01777 },
-    { "tmp/.X11-unix", 0755 },
-    { "self", 0755},
-  };
-  struct { char *name;  mode_t mode; } files[] = {
-    { "tmp/.X11-unix/X0", 0755 },
-  };
-  struct { char *path;  char *target; } symlinks[] = {
-    { "lib", "usr/lib" },
-    { "bin", "usr/bin" },
-    { "sbin", "usr/sbin"},
-    { "etc", "usr/etc"},
-  };
-  struct { char *path;  char *target; } bindmounts[] = {
-    { "/tmp/.X11-unix/X0", "tmp/.X11-unix/X0" },
-  };
-  char *dont_mounts[] = {"lib", "lib64", "bin", "sbin", "usr", ".", "..", "boot", "tmp", "etc", "self"};
   int pipefd[2];
   uid_t saved_euid;
   pid_t pid;
@@ -137,6 +127,25 @@ main (int argc,
   char **args;
   int n_args;
   char old_cwd[256];
+
+  char tmpdir[] = "/tmp/run-app.XXXXXX";
+  struct { file_type_t type; char *name;  mode_t mode; char *data; file_flags_t flags; } create[] = {
+    { FILE_TYPE_DIR, ".oldroot", 0755 },
+    { FILE_TYPE_DIR, "usr", 0755 },
+    { FILE_TYPE_DIR, "tmp", 01777 },
+    { FILE_TYPE_DIR, "self", 0755},
+    { FILE_TYPE_SYMLINK, "lib", 0755, "usr/lib"},
+    { FILE_TYPE_SYMLINK, "bin", 0755, "usr/bin" },
+    { FILE_TYPE_SYMLINK, "sbin", 0755, "usr/sbin"},
+    { FILE_TYPE_SYMLINK, "etc", 0755, "usr/etc"},
+    { FILE_TYPE_DIR, "tmp/.X11-unix", 0755 },
+    { FILE_TYPE_REGULAR, "tmp/.X11-unix/X0", 0755 },
+    { FILE_TYPE_BIND, "tmp/.X11-unix/X0", 0755, "/tmp/.X11-unix/X0"},
+  };
+  char *dont_mounts[] = {
+    ".", "..", "lib", "lib64", "bin", "sbin", "usr", "boot",
+    "tmp", "etc", "self",
+  };
 
   args = &argv[1];
   n_args = argc - 1;
@@ -249,31 +258,40 @@ main (int argc,
   if (chdir (newroot) != 0)
       fail ("chdir");
 
-  for (i = 0; i < N_ELEMENTS(dirs); i++)
+  for (i = 0; i < N_ELEMENTS(create); i++)
     {
-      if (mkdir (dirs[i].name, dirs[i].mode) != 0)
-        fail ("dirs");
-    }
+      int fd;
+      char *name = create[i].name;
+      mode_t mode = create[i].mode;
+      char *data = create[i].data;
 
-  for (i = 0; i < N_ELEMENTS(files); i++)
-    {
-      int fd = creat (files[i].name, files[i].mode);
-      if (fd == -1)
-        fail ("files");
-      close (fd);
-    }
+      switch (create[i].type)
+        {
+        case FILE_TYPE_DIR:
+          if (mkdir (name, mode) != 0)
+            fail ("dir");
+          break;
 
-  for (i = 0; i < N_ELEMENTS(symlinks); i++)
-    {
-      if (symlink (symlinks[i].target, symlinks[i].path) != 0)
-        fail ("symlinks");
-    }
+        case FILE_TYPE_REGULAR:
+          fd = creat (name, mode);
+          if (fd == -1)
+            fail ("files");
+          close (fd);
+          break;
 
-  for (i = 0; i < N_ELEMENTS(bindmounts); i++)
-    {
-      if (mount (bindmounts[i].path, bindmounts[i].target,
-                 NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
-        fail ("bindmounts");
+        case FILE_TYPE_SYMLINK:
+          if (symlink (data, name) != 0)
+            fail ("symlink");
+          break;
+
+        case FILE_TYPE_BIND:
+          if (mount (data, name, NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
+            fail ("bindmount");
+          break;
+
+        default:
+          die ("Unknown create type %d\n", create[i].type);
+        }
     }
 
   if (mount (runtime_path, "usr",
