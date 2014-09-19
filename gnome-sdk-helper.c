@@ -136,6 +136,7 @@ typedef enum {
 typedef enum {
   FILE_FLAGS_NONE = 0,
   FILE_FLAGS_USER_OWNED = 1 << 0,
+  FILE_FLAGS_NON_FATAL = 1 << 1,
 } file_flags_t;
 
 int
@@ -196,6 +197,8 @@ main (int argc,
     { FILE_TYPE_DEVICE, "dev/random", 0666, "/dev/random"},
     { FILE_TYPE_DEVICE, "dev/urandom", 0666, "/dev/urandom"},
     { FILE_TYPE_DEVICE, "dev/tty", 0666, "/dev/tty"},
+    { FILE_TYPE_DIR, "dev/dri", 0755},
+    { FILE_TYPE_BIND, "dev/dri", 0755, "/dev/dri", FILE_FLAGS_NON_FATAL},
   };
 
   static const struct {
@@ -361,9 +364,11 @@ main (int argc,
         case FILE_TYPE_BIND:
         case FILE_TYPE_BIND_RO:
           if (mount (data, name, NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
-            die_with_error ("mounting bindmount %s", name);
-
-          if (create[i].type == FILE_TYPE_BIND_RO)
+            {
+              if ((flags & FILE_FLAGS_NON_FATAL) == 0)
+                die_with_error ("mounting bindmount %s", name);
+            }
+          else if (create[i].type == FILE_TYPE_BIND_RO)
             {
               if (mount ("none", name,
                          NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY, NULL) != 0)
