@@ -1,0 +1,106 @@
+#!/bin/bash
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-sdk"
+REPO="${XDG_DATA_HOME}/repo"
+DEPLOY="${XDG_DATA_HOME}/deploy"
+
+show_help() {
+cat << EOF
+Usage: ${0##*/} [-d] [-b branch] APP <command> [arguments...]
+Runs a command in the gnome sdk runtime.
+
+    -h              show this help
+    -d, --devel     run with development runtime
+
+Apps and runtimes are stored in ${XDG_DATA_HOME}.
+EOF
+}
+
+if [ "$#" == "0" ]; then
+    show_help
+    exit 1
+fi
+
+case `arch` in
+x86_64)
+        ARCH="x86-64"
+        ;;
+*)
+        echo "Unsupported architecture"
+        exit 1
+        ;;
+esac
+
+RUNTIME_ALT="runtime"
+BRANCH=""
+
+while :; do
+    case $1 in
+        -h|-\?|--help)
+            show_help
+            exit
+            ;;
+        -d|--devel)
+            RUNTIME_ALT=sdk
+            ;;
+        -b|--branch)
+            if [ "$2" ]; then
+                BRANCH=$2
+                shift 2
+                continue
+            else
+                echo 'ERROR: Must specify a non-empty "--branch branch" argument.' >&2
+                exit 1
+            fi
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -?*)
+            printf 'Warning: Unknown option (ignored): %s\n' "$1" >&2
+            ;;
+        *)
+            break
+    esac
+
+    shift
+done
+
+APP="$1"
+shift
+
+PARTIAL="app/${APP}"
+
+if [ ! -d ${DEPLOY}/$PARTIAL ]; then
+    echo "App ${APP} is not installed"
+    exit 1
+fi
+
+if test x"$BRANCH" == "x"; then
+    BRANCH=`cat ${DEPLOY}/$PARTIAL/default_branch`
+fi
+
+FULLNAME="app/${APP}/${ARCH}/${BRANCH}"
+APPDEPLOY="${DEPLOY}/${FULLNAME}/deploy"
+
+if [ ! -L ${APPDEPLOY}/latest ]; then
+    echo "App ${APP}/${ARCH}/${BRANCH} is not updated"
+    exit 1
+fi
+
+REV=`readlink ${APPDEPLOY}/latest`
+
+APPDIR="${APPDEPLOY}/${REV}/files"
+
+RUNTIME=`cat ${APPDEPLOY}/$REV/${RUNTIME_ALT}`
+
+if [ ! -L ${DEPLOY}/runtime/${RUNTIME}/deploy/latest ]; then
+    echo "Error: Required runtime '$RUNTIME' is not installed"
+    exit 1
+fi
+
+RUNTIME_DIR="${DEPLOY}/runtime/${RUNTIME}/deploy/latest/files"
+
+touch $APPDIR/.ref
+
+gnome-sdk-helper -a $APPDIR $RUNTIME_DIR "$@"

@@ -1,0 +1,166 @@
+#!/bin/bash
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-sdk"
+REPO="${XDG_DATA_HOME}/repo"
+DEPLOY="${XDG_DATA_HOME}/deploy"
+
+if [ $# -lt 1 ]; then
+        echo "Usage: $0 <command> ..."
+        exit 1
+fi
+
+cmd="$1"
+shift
+
+case `arch` in
+x86_64)
+        ARCH="x86-64"
+        ;;
+*)
+        echo "Unsupported architecture"
+        exit 1
+        ;;
+esac
+
+
+# Initialize repo if needed
+if test ! -d "${REPO}"; then
+    mkdir -p ${XDG_DATA_HOME}
+    ostree --repo "${REPO}" init
+fi
+
+update ()
+{
+    TYPE="$1"
+    NAME="$2"
+    BRANCH="$3"
+
+    PARTIAL="${TYPE}/${NAME}"
+
+    if [ ! -d "${DEPLOY}/$PARTIAL" ]; then
+        echo "$NAME not installed"
+        exit 1
+    fi
+
+    ORIGIN=`cat ${DEPLOY}/$PARTIAL/origin`
+    if test x"$BRANCH" == "x"; then
+        BRANCH=`cat ${DEPLOY}/$PARTIAL/default_branch`
+    fi
+
+    FULLNAME="${TYPE}/${NAME}/${ARCH}/${BRANCH}"
+    if ! ostree --repo "${REPO}" pull $ORIGIN $FULLNAME; then
+        exit 1
+    fi
+
+    if ! REV=`ostree --repo "${REPO}" rev-parse "${FULLNAME}"`; then
+        exit 1
+    fi
+
+    SUBDEPLOY="${DEPLOY}/${FULLNAME}/deploy"
+    mkdir -p ${SUBDEPLOY}
+
+    # TODO: Make this atomic via tmp + rename
+    if [ ! -d ${SUBDEPLOY}/$REV ]; then
+        if ! ostree --repo "${REPO}" checkout $FULLNAME ${SUBDEPLOY}/$REV; then
+            exit 1
+        fi
+    fi
+
+    touch ${SUBDEPLOY}/$REV/.ref
+    ln -sfn "$REV" "${SUBDEPLOY}/latest"
+
+    if test $TYPE == "app"; then
+        RUNTIME=`cat ${SUBDEPLOY}/$REV/runtime`
+
+        if [ ! -L ${DEPLOY}/runtime/${RUNTIME}/deploy/latest ]; then
+            echo "App requires runtime ${RUNTIME} which is not installed"
+            exit 1
+        fi
+    fi
+}
+
+install ()
+{
+    TYPE="$1"
+    REMOTE="$2"
+    NAME="$3"
+    BRANCH="$4"
+
+    PARTIAL="${TYPE}/${NAME}"
+
+    if [ -d "${DEPLOY}/$PARTIAL" ]; then
+        echo "$NAME already installed"
+        exit 1
+    fi
+
+    if test x"$BRANCH" == "x"; then
+        BRANCH="master"
+    fi
+
+    mkdir -p "${DEPLOY}/${PARTIAL}"
+    if test $TYPE == "app"; then
+        mkdir -p "${DEPLOY}/${PARTIAL}/data"
+    fi
+    echo "$REMOTE" > "${DEPLOY}/${PARTIAL}/origin"
+    echo "$BRANCH" > "${DEPLOY}/${PARTIAL}/default_branch"
+
+    update "$TYPE" "$NAME" "$BRANCH"
+}
+
+
+case $cmd in
+list-apps)
+        ostree --repo "${REPO}" refs app
+        ;;
+
+list-runtimes)
+        ostree --repo "${REPO}" refs runtime
+        ;;
+
+add-remote)
+        if [ $# -lt 2 ]; then
+            echo "Usage: add-remote <name> <uri>"
+            exit 1
+        fi
+        ostree --repo "${REPO}" remote add --set=gpg-verify=false "$1" "$2"
+        ;;
+
+install)
+        if [ $# -lt 2 ]; then
+            echo "Usage: install-runtime <remote> <app> [<branch>]"
+            exit 1
+        fi
+
+        install "app" "$1" "$2" "$3"
+        ;;
+
+install-runtime)
+        if [ $# -lt 2 ]; then
+            echo "Usage: install-runtime <remote> <app> [<branch>]"
+            exit 1
+        fi
+
+        install "runtime" "$1" "$2" "$3"
+        ;;
+
+update-runtime)
+        if [ $# -lt 2 ]; then
+            echo "Usage: install-runtime <name> <branch>"
+            exit 1
+        fi
+
+        update "runtime" $1 $2
+        ;;
+
+update)
+        if [ $# -lt 1 ]; then
+            echo "Usage: install <app> [<branch>]"
+            exit 1
+        fi
+
+        update "app" $1 $BRANCH
+        ;;
+
+*)
+        echo "Unknown command ${cmd}"
+        exit 1
+esac

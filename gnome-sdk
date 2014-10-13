@@ -1,22 +1,32 @@
 #!/bin/sh
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-sdk"
+DEPLOY="${XDG_DATA_HOME}/deploy"
+BUILD="${XDG_DATA_HOME}/build"
 
-XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
-DATA_DIR=$XDG_DATA_HOME/gnome-sdk
+case `arch` in
+x86_64)
+        ARCH="x86-64"
+        ;;
+*)
+        echo "Unsupported architecture"
+        exit 1
+        ;;
+esac
 
 show_help() {
 cat << EOF
-Usage: ${0##*/} [-p] [-r RUNTIME] [-a APP] <command> [arguments...]
+Usage: ${0##*/} [-r RUNTIME] [-b BUILD] <command> [arguments...]
 Runs a command in the gnome sdk runtime.
 
     -h              show this help
-    -p, --platform  run with default application platform runtime rather than the sdk
     -r, --runtime   run with a specific runtime
-    -a, --app       run with the specified app in /self
+    -b, --branch    run with a specific runtime branch
+    -t, --target    run with the specified build dir in /self
 
-All runtimes are stored in ${DATA_DIR}.
-The default sdk is called 'sdk' and can be changed by setting GNOME_SDK_DEVEL_RUNTIME.
-The default platform is called 'platform' and can be changed by setting GNOME_SDK_APP_RUNTIME.
-The default app is called 'defaultapp' and can be changed by setting GNOME_SDK_APP.
+All runtimes are stored in ${XDK_DATA_HOME}.
+The default sdk is called 'org.gnome.Sdk' and can be changed by setting GNOME_SDK_RUNTIME.
+The default branch is called '3.14' and can be changed by setting GNOME_SDK_RUNTIME_BRANCH.
+The default target is called 'default' and can be changed by setting GNOME_SDK_TARGET.
 EOF
 }
 
@@ -25,10 +35,9 @@ if [ "$#" == "0" ]; then
     exit 1
 fi
 
-APP=${GNOME_SDK_APP:-defaultapp}
-SDK=${GNOME_SDK_DEVEL_RUNTIME:-sdk}
-PLATFORM=${GNOME_SDK_APP_RUNTIME:-platform}
-RUNTIME=$SDK
+TARGET=${GNOME_SDK_TARGET:-default}
+RUNTIME=${GNOME_SDK_RUNTIME:-org.gnome.Sdk}
+BRANCH=${GNOME_SDK_RUNTIME_BRANCH:-3.14}
 
 while :; do
     case $1 in
@@ -46,18 +55,25 @@ while :; do
                 exit 1
             fi
             ;;
-        -a|--app)
+        -b|--branch)
             if [ "$2" ]; then
-                APP=$2
+                BRANCH=$2
                 shift 2
                 continue
             else
-                echo 'ERROR: Must specify a non-empty "--app APP" argument.' >&2
+                echo 'ERROR: Must specify a non-empty "--branch BRANCH" argument.' >&2
                 exit 1
             fi
             ;;
-        -p|--platform)
-            RUNTIME=$PLATFORM
+        -t|--target)
+            if [ "$2" ]; then
+                TARGET=$2
+                shift 2
+                continue
+            else
+                echo 'ERROR: Must specify a non-empty "--target TARGET" argument.' >&2
+                exit 1
+            fi
             ;;
         --)
             shift
@@ -80,16 +96,16 @@ declare -x GI_TYPELIB_PATH="/self/lib/girepository-1.0"
 declare -x LDFLAGS="-L/self/lib "
 declare -x PKG_CONFIG_PATH="/self/lib/pkgconfig:/self/share/pkgconfig"
 
-mkdir -p $DATA_DIR
+mkdir -p $BUILD
 
-RUNTIME_DIR=$DATA_DIR/$RUNTIME
+RUNTIME_DIR=$DEPLOY/runtime/$RUNTIME/$ARCH/$BRANCH/deploy/latest/files
 
 if ! test -d $RUNTIME_DIR; then
     echo "Error: Runtime '$RUNTIME' does not exist at $RUNTIME_DIR"
     exit 1
 fi
 
-APP_DIR=$DATA_DIR/$APP
+APP_DIR=$BUILD/$TARGET
 mkdir -p $APP_DIR
 
 gnome-sdk-helper -a $APP_DIR $RUNTIME_DIR "$@"
