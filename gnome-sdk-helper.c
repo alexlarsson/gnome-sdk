@@ -173,6 +173,8 @@ main (int argc,
     { FILE_TYPE_DIR, "run", 0755},
     { FILE_TYPE_DIR, "run/user", 0755},
     { FILE_TYPE_DIR, "run/user/%1$d", 0700, NULL, FILE_FLAGS_USER_OWNED },
+    { FILE_TYPE_DIR, "var", 0755},
+    { FILE_TYPE_SYMLINK, "var/tmp", 0755, "/tmp"},
     { FILE_TYPE_SYMLINK, "lib", 0755, "usr/lib"},
     { FILE_TYPE_SYMLINK, "bin", 0755, "usr/bin" },
     { FILE_TYPE_SYMLINK, "sbin", 0755, "usr/sbin"},
@@ -217,7 +219,7 @@ main (int argc,
 
   char *dont_mounts[] = {
     ".", "..", "lib", "lib64", "bin", "sbin", "usr", "boot",
-    "tmp", "etc", "self", "run", "proc", "sys", "dev",
+    "tmp", "etc", "self", "run", "proc", "sys", "dev", "var"
   };
 
   args = &argv[1];
