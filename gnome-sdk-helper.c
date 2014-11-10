@@ -108,7 +108,7 @@ strdup_printf (const char *format,
 void
 usage (char **argv)
 {
-  fprintf (stderr, "usage: %s [-a <path to app>] <path to runtime> <command..>\n", argv[0]);
+  fprintf (stderr, "usage: %s [-w] [-W] [-a <path to app>] <path to runtime> <command..>\n", argv[0]);
   exit (1);
 }
 
@@ -156,6 +156,8 @@ main (int argc,
   char *app_path = NULL;
   char **args;
   int n_args;
+  int writable = 0;
+  int writable_app = 0;
   char old_cwd[256];
 
   char tmpdir[] = "/tmp/run-app.XXXXXX";
@@ -229,6 +231,18 @@ main (int argc,
     {
       switch (args[0][1])
         {
+        case 'W':
+          writable = 1;
+          args += 1;
+          n_args -= 1;
+          break;
+
+        case 'w':
+          writable_app = 1;
+          args += 1;
+          n_args -= 1;
+          break;
+
         case 'a':
           if (n_args < 2)
               usage (argv);
@@ -434,7 +448,7 @@ main (int argc,
     die_with_error ("mount usr private");
 
   if (mount ("none", "usr",
-             NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+             NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_NODEV|MS_NOSUID|(writable?0:MS_RDONLY), NULL) != 0)
     die_with_error ("mount usr readonly");
 
   if (app_path != NULL)
@@ -448,7 +462,7 @@ main (int argc,
         die_with_error ("mount self private");
 
       if (mount ("none", "self",
-                 NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+                 NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_NODEV|MS_NOSUID|(writable_app?0:MS_RDONLY), NULL) != 0)
         die_with_error ("mount self readonly");
     }
 
