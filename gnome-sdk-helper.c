@@ -108,7 +108,7 @@ strdup_printf (const char *format,
 void
 usage (char **argv)
 {
-  fprintf (stderr, "usage: %s [-w] [-W] [-a <path to app>] <path to runtime> <command..>\n", argv[0]);
+  fprintf (stderr, "usage: %s [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
   exit (1);
 }
 
@@ -154,6 +154,7 @@ main (int argc,
   pid_t pid;
   char *runtime_path = NULL;
   char *app_path = NULL;
+  char *var_path = NULL;
   char **args;
   int n_args;
   int writable = 0;
@@ -248,6 +249,15 @@ main (int argc,
               usage (argv);
 
           app_path = args[1];
+          args += 2;
+          n_args -= 2;
+          break;
+
+        case 'v':
+          if (n_args < 2)
+              usage (argv);
+
+          var_path = args[1];
           args += 2;
           n_args -= 2;
           break;
@@ -463,6 +473,21 @@ main (int argc,
 
       if (mount ("none", "self",
                  NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_NODEV|MS_NOSUID|(writable_app?0:MS_RDONLY), NULL) != 0)
+        die_with_error ("mount self readonly");
+    }
+
+  if (var_path != NULL)
+    {
+      if (mount (var_path, "var",
+                 NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
+        die_with_error ("mount self");
+
+      if (mount ("none", "var",
+                 NULL, MS_REC|MS_PRIVATE, NULL) != 0)
+        die_with_error ("mount self private");
+
+      if (mount ("none", "self",
+                 NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_NODEV|MS_NOSUID, NULL) != 0)
         die_with_error ("mount self readonly");
     }
 
