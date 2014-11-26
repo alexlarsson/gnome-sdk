@@ -13,7 +13,7 @@ shift
 
 case `arch` in
 x86_64)
-        ARCH="x86-64"
+        ARCH="x86_64"
         ;;
 *)
         echo "Unsupported architecture"
@@ -87,11 +87,6 @@ install ()
 
     PARTIAL="${TYPE}/${NAME}"
 
-    if [ -d "${DEPLOY}/$PARTIAL" ]; then
-        echo "$NAME already installed"
-        exit 1
-    fi
-
     if test x"$BRANCH" == "x"; then
         BRANCH="master"
     fi
@@ -100,8 +95,12 @@ install ()
     if test $TYPE == "app"; then
         mkdir -p "${DEPLOY}/${PARTIAL}/data"
     fi
-    echo "$REMOTE" > "${DEPLOY}/${PARTIAL}/origin"
-    echo "$BRANCH" > "${DEPLOY}/${PARTIAL}/default_branch"
+    if [ ! -d "${DEPLOY}/$PARTIAL/origin" ]; then
+        echo "$REMOTE" > "${DEPLOY}/${PARTIAL}/origin"
+    fi
+    if [ ! -d "${DEPLOY}/$PARTIAL/default_branch" ]; then
+        echo "$BRANCH" > "${DEPLOY}/${PARTIAL}/default_branch"
+    fi
 
     update "$TYPE" "$NAME" "$BRANCH"
 }
@@ -135,7 +134,7 @@ install)
 
 install-runtime)
         if [ $# -lt 2 ]; then
-            echo "Usage: install-runtime <remote> <app> [<branch>]"
+            echo "Usage: install-runtime <remote> <runtime> [<branch>]"
             exit 1
         fi
 
@@ -144,7 +143,7 @@ install-runtime)
 
 update-runtime)
         if [ $# -lt 2 ]; then
-            echo "Usage: install-runtime <name> <branch>"
+            echo "Usage: install-runtime <runtime> <branch>"
             exit 1
         fi
 
