@@ -123,8 +123,6 @@ fi
 mkdir -p $APP_DIR/var
 mkdir -p $APP_DIR/files
 
-    set -x
-
 if [ $VAR != "no" ]; then
 
     if ! test -d $VAR_DIR; then
