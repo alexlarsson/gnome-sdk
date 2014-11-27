@@ -88,6 +88,29 @@ strconcat (const char *s1,
   return res;
 }
 
+char *
+strconcat_len (const char *s1,
+               const char *s2,
+               size_t s2_len)
+{
+  size_t len = 0;
+  char *res;
+
+  if (s1)
+    len += strlen (s1);
+  if (s2)
+    len += s2_len;
+
+  res = xmalloc (len + 1);
+  *res = 0;
+  if (s1)
+    strcat (res, s1);
+  if (s2)
+    strncat (res, s2, s2_len);
+
+  return res;
+}
+
 char*
 strdup_printf (const char *format,
                ...)
@@ -140,6 +163,12 @@ typedef enum {
 } file_flags_t;
 
 int
+ascii_isdigit (char c)
+{
+  return c >= '0' && c <= '9';
+}
+
+int
 main (int argc,
       char **argv)
 {
@@ -160,6 +189,7 @@ main (int argc,
   int writable = 0;
   int writable_app = 0;
   char old_cwd[256];
+  const char *display, *display_end;
 
   char tmpdir[] = "/tmp/run-app.XXXXXX";
   static const struct {
@@ -183,8 +213,7 @@ main (int argc,
     { FILE_TYPE_SYMLINK, "sbin", 0755, "usr/sbin"},
     { FILE_TYPE_SYMLINK, "etc", 0755, "usr/etc"},
     { FILE_TYPE_DIR, "tmp/.X11-unix", 0755 },
-    { FILE_TYPE_REGULAR, "tmp/.X11-unix/X0", 0755 },
-    { FILE_TYPE_BIND, "tmp/.X11-unix/X0", 0755, "/tmp/.X11-unix/X0"},
+    { FILE_TYPE_REGULAR, "tmp/.X11-unix/X99", 0755 },
     { FILE_TYPE_DIR, "proc", 0755},
     { FILE_TYPE_MOUNT, "proc"},
     { FILE_TYPE_BIND_RO, "proc/sys", 0755, "proc/sys"},
@@ -501,6 +530,48 @@ main (int argc,
   if (mount ("/etc/group", "etc/group",
              NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
     die_with_error ("mount group");
+
+
+  /* Bind mount in X socket
+   * This is a bit iffy, as Xlib typically uses abstract unix domain sockets
+   * to connect to X, but that is not namespaced. We instead set DISPLAY=99
+   * and point /tmp/.X11-unix/X99 to the right X socket. Any Xserver listening
+   * to global abstract unix domain sockets are still accessible to the app
+   * though...
+   */
+  display = getenv ("DISPLAY");
+  if (display != NULL &&
+      /* Only handle local displays */
+      display[0] == ':' && ascii_isdigit (display[1]))
+    {
+      const char *display_socket;
+      struct stat st;
+
+      display++;
+      display_end = display;
+      while (ascii_isdigit (*display_end))
+        display_end++;
+
+      display_socket = strconcat_len ("/tmp/.X11-unix/X", display, display_end - display);
+      display = NULL;
+
+      if (stat (display_socket, &st) == 0 &&
+          S_ISSOCK (st.st_mode))
+        {
+          if (mount (display_socket, "tmp/.X11-unix/X99", NULL, MS_MGC_VAL|MS_BIND, NULL) == 0)
+            display = ":99";
+        }
+    }
+  else
+    display = NULL;
+
+  if (display == NULL)
+    unsetenv ("DISPLAY");
+  else
+    {
+      if (setenv("DISPLAY", display, 1))
+        die ("oom");
+    }
 
   /* Bind mount most dirs in / into the new root */
   dir = opendir("/");
