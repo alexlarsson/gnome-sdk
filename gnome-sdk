@@ -22,6 +22,7 @@ Runs a command in the gnome sdk runtime.
     -r, --runtime   run with a specific runtime
     -b, --branch    run with a specific runtime branch
     -t, --target    run with the specified build dir in /self
+    -c, --clear     clear the build dir before starting
 
 All runtimes are stored in ${XDK_DATA_HOME}.
 The default sdk is called 'org.gnome.Sdk' and can be changed by setting GNOME_SDK_RUNTIME.
@@ -38,6 +39,7 @@ fi
 TARGET=${GNOME_SDK_TARGET:-default}
 RUNTIME=${GNOME_SDK_RUNTIME:-org.gnome.Sdk}
 BRANCH=${GNOME_SDK_RUNTIME_BRANCH:-3.14}
+CLEAR=no
 
 while :; do
     case $1 in
@@ -75,6 +77,9 @@ while :; do
                 exit 1
             fi
             ;;
+        -c|--clear)
+            CLEAR=yes
+            ;;
         --)
             shift
             break
@@ -106,6 +111,10 @@ if ! test -d $RUNTIME_DIR; then
 fi
 
 APP_DIR=$BUILD/$TARGET
-mkdir -p $APP_DIR
+if [ $CLEAR != "no" ]; then
+    rm -rf $APP_DIR
+fi
+mkdir -p $APP_DIR/var
+mkdir -p $APP_DIR/files
 
-gnome-sdk-helper -a $APP_DIR $RUNTIME_DIR "$@"
+gnome-sdk-helper -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
