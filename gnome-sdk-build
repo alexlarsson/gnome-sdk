@@ -59,6 +59,11 @@ while :; do
                 exit 1
             fi
             ;;
+        -p|--platform)
+            RUNTIME=org.gnome.Platform
+            shift
+            continue
+            ;;
         -b|--branch)
             if [ "$2" ]; then
                 BRANCH=$2
