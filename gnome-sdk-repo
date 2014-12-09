@@ -25,7 +25,7 @@ esac
 # Initialize repo if needed
 if test ! -d "${REPO}"; then
     mkdir -p ${XDG_DATA_HOME}
-    ostree --repo "${REPO}" init
+    ostree init --repo "${REPO}"
 fi
 
 update ()
@@ -47,11 +47,11 @@ update ()
     fi
 
     FULLNAME="${TYPE}/${NAME}/${ARCH}/${BRANCH}"
-    if ! ostree --repo "${REPO}" pull $ORIGIN $FULLNAME; then
+    if ! ostree  pull --repo "${REPO}" $ORIGIN $FULLNAME; then
         exit 1
     fi
 
-    if ! REV=`ostree --repo "${REPO}" rev-parse "${FULLNAME}"`; then
+    if ! REV=`ostree rev-parse --repo "${REPO}" "${FULLNAME}"`; then
         exit 1
     fi
 
@@ -60,7 +60,7 @@ update ()
 
     # TODO: Make this atomic via tmp + rename
     if [ ! -d ${SUBDEPLOY}/$REV ]; then
-        if ! ostree --repo "${REPO}" checkout $FULLNAME ${SUBDEPLOY}/$REV; then
+        if ! ostree checkout --repo "${REPO}" $FULLNAME ${SUBDEPLOY}/$REV; then
             exit 1
         fi
     fi
@@ -108,11 +108,11 @@ install ()
 
 case $cmd in
 list-apps)
-        ostree --repo "${REPO}" refs app
+        ostree refs --repo "${REPO}" app
         ;;
 
 list-runtimes)
-        ostree --repo "${REPO}" refs runtime
+        ostree refs --repo "${REPO}" runtime
         ;;
 
 add-remote)
@@ -120,7 +120,7 @@ add-remote)
             echo "Usage: add-remote <name> <uri>"
             exit 1
         fi
-        ostree --repo "${REPO}" remote add --set=gpg-verify=false "$1" "$2"
+        ostree remote --repo "${REPO}" add --set=gpg-verify=false "$1" "$2"
         ;;
 
 install)
