@@ -126,6 +126,8 @@ if [ $CLEAR != "no" ]; then
     rm -rf $APP_DIR
 fi
 mkdir -p $APP_DIR/var
+# Ensure we always have /var/tmp
+mkdir -p $APP_DIR/var/tmp
 mkdir -p $APP_DIR/files
 
 if [ $VAR != "no" ]; then
