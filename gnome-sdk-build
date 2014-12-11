@@ -126,8 +126,6 @@ if [ $CLEAR != "no" ]; then
     rm -rf $APP_DIR
 fi
 mkdir -p $APP_DIR/var
-# Ensure we always have /var/tmp
-mkdir -p $APP_DIR/var/tmp
 mkdir -p $APP_DIR/files
 
 if [ $VAR != "no" ]; then
@@ -140,5 +138,8 @@ if [ $VAR != "no" ]; then
     rm -rf $APP_DIR/var
     cp -a -T  $VAR_DIR $APP_DIR/var
 fi
+
+# Ensure we always have /var/tmp
+mkdir -p $APP_DIR/var/tmp
 
 gnome-sdk-helper -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
