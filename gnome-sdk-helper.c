@@ -160,12 +160,185 @@ typedef enum {
   FILE_FLAGS_NONE = 0,
   FILE_FLAGS_USER_OWNED = 1 << 0,
   FILE_FLAGS_NON_FATAL = 1 << 1,
+  FILE_FLAGS_IF_LAST_FAILED = 1 << 2,
 } file_flags_t;
+
+typedef struct {
+    file_type_t type;
+    const char *name;
+    mode_t mode;
+    const char *data;
+    file_flags_t flags;
+} create_table_t;
+
+typedef struct {
+    const char *what;
+    const char *where;
+    const char *type;
+    const char *options;
+    unsigned long flags;
+} mount_table_t;
 
 int
 ascii_isdigit (char c)
 {
   return c >= '0' && c <= '9';
+}
+
+static const create_table_t create[] = {
+  { FILE_TYPE_DIR, ".oldroot", 0755 },
+  { FILE_TYPE_DIR, "usr", 0755 },
+  { FILE_TYPE_DIR, "tmp", 01777 },
+  { FILE_TYPE_DIR, "self", 0755},
+  { FILE_TYPE_DIR, "run", 0755},
+  { FILE_TYPE_DIR, "run/user", 0755},
+  { FILE_TYPE_DIR, "run/user/%1$d", 0700, NULL, FILE_FLAGS_USER_OWNED },
+  { FILE_TYPE_DIR, "var", 0755},
+  { FILE_TYPE_SYMLINK, "var/tmp", 0755, "/tmp"},
+  { FILE_TYPE_SYMLINK, "lib", 0755, "usr/lib"},
+  { FILE_TYPE_SYMLINK, "bin", 0755, "usr/bin" },
+  { FILE_TYPE_SYMLINK, "sbin", 0755, "usr/sbin"},
+  { FILE_TYPE_SYMLINK, "etc", 0755, "usr/etc"},
+  { FILE_TYPE_DIR, "tmp/.X11-unix", 0755 },
+  { FILE_TYPE_REGULAR, "tmp/.X11-unix/X99", 0755 },
+  { FILE_TYPE_DIR, "proc", 0755},
+  { FILE_TYPE_MOUNT, "proc"},
+  { FILE_TYPE_BIND_RO, "proc/sys", 0755, "proc/sys"},
+  { FILE_TYPE_DIR, "sys", 0755},
+  { FILE_TYPE_MOUNT, "sys"},
+  { FILE_TYPE_DIR, "dev", 0755},
+  { FILE_TYPE_MOUNT, "dev"},
+  { FILE_TYPE_DIR, "dev/pts", 0755},
+  { FILE_TYPE_MOUNT, "dev/pts"},
+  { FILE_TYPE_DIR, "dev/shm", 0755},
+  { FILE_TYPE_MOUNT, "dev/shm"},
+  { FILE_TYPE_DEVICE, "dev/null", S_IFCHR|0666, "/dev/null"},
+  { FILE_TYPE_DEVICE, "dev/zero", S_IFCHR|0666, "/dev/zero"},
+  { FILE_TYPE_DEVICE, "dev/full", S_IFCHR|0666, "/dev/full"},
+  { FILE_TYPE_DEVICE, "dev/random", S_IFCHR|0666, "/dev/random"},
+  { FILE_TYPE_DEVICE, "dev/urandom", S_IFCHR|0666, "/dev/urandom"},
+  { FILE_TYPE_DEVICE, "dev/tty", S_IFCHR|0666, "/dev/tty"},
+  { FILE_TYPE_DIR, "dev/dri", 0755},
+  { FILE_TYPE_BIND, "dev/dri", 0755, "/dev/dri", FILE_FLAGS_NON_FATAL},
+};
+
+static const mount_table_t mount_table[] = {
+  { "proc",      "proc",     "proc",  NULL,        MS_NOSUID|MS_NOEXEC|MS_NODEV           },
+  { "sysfs",     "sys",      "sysfs", NULL,        MS_RDONLY|MS_NOSUID|MS_NOEXEC|MS_NODEV },
+  { "tmpfs",     "dev",      "tmpfs", "mode=755",  MS_NOSUID|MS_STRICTATIME               },
+  { "devpts",    "dev/pts",  "devpts","newinstance,ptmxmode=0666,mode=620,gid=5", MS_NOSUID|MS_NOEXEC },
+  { "tmpfs",     "dev/shm",  "tmpfs", "mode=1777", MS_NOSUID|MS_NODEV|MS_STRICTATIME      },
+};
+
+const char *dont_mount_in_root[] = {
+  ".", "..", "lib", "lib64", "bin", "sbin", "usr", "boot",
+  "tmp", "etc", "self", "run", "proc", "sys", "dev", "var"
+};
+
+static void
+create_files (const create_table_t *create, int n_create)
+{
+  int last_failed = 0;
+  int i;
+
+  for (i = 0; i < n_create; i++)
+    {
+      int fd;
+      char *name = strdup_printf (create[i].name, getuid());
+      mode_t mode = create[i].mode;
+      const char *data = create[i].data;
+      file_flags_t flags = create[i].flags;
+      struct stat st;
+      int k;
+      int found;
+
+      if ((flags & FILE_FLAGS_IF_LAST_FAILED) &&
+          !last_failed)
+        continue;
+
+      last_failed = 0;
+
+      switch (create[i].type)
+        {
+        case FILE_TYPE_DIR:
+          if (mkdir (name, mode) != 0)
+            die_with_error ("creating dir %s", name);
+          break;
+
+        case FILE_TYPE_REGULAR:
+          fd = creat (name, mode);
+          if (fd == -1)
+            die_with_error ("creating file %s", name);
+          close (fd);
+          break;
+
+        case FILE_TYPE_SYMLINK:
+          if (symlink (data, name) != 0)
+            die_with_error ("creating symlink %s", name);
+          break;
+
+        case FILE_TYPE_BIND:
+        case FILE_TYPE_BIND_RO:
+          if (mount (data, name, NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
+            {
+              if ((flags & FILE_FLAGS_NON_FATAL) == 0)
+                die_with_error ("mounting bindmount %s", name);
+              last_failed = 1;
+            }
+          else if (create[i].type == FILE_TYPE_BIND_RO)
+            {
+              if (mount ("none", name,
+                         NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY, NULL) != 0)
+                die_with_error ("making bindmount %s readonly", name);
+            }
+
+          break;
+
+        case FILE_TYPE_MOUNT:
+          found = 0;
+          for (k = 0; k < N_ELEMENTS(mount_table); k++)
+            {
+              if (strcmp (mount_table[k].where, name) == 0)
+                {
+                  if (mount(mount_table[k].what,
+                            mount_table[k].where,
+                            mount_table[k].type,
+                            mount_table[k].flags,
+                            mount_table[k].options) < 0)
+                    die_with_error ("Mounting %s", name);
+                  found = 1;
+                }
+            }
+
+          if (!found)
+            die ("Unable to find mount %s\n", name);
+
+          break;
+
+        case FILE_TYPE_DEVICE:
+          if (stat (data, &st) < 0)
+            die_with_error ("stat node %s", data);
+
+          if (!S_ISCHR (st.st_mode) && !S_ISBLK (st.st_mode))
+            die_with_error ("node %s is not a device", data);
+
+          if (mknod (name, mode, st.st_rdev) < 0)
+            die_with_error ("mknod %s", name);
+
+          break;
+
+        default:
+          die ("Unknown create type %d\n", create[i].type);
+        }
+
+      if (flags & FILE_FLAGS_USER_OWNED)
+        {
+          if (chown (name, getuid(), -1))
+            die_with_error ("chown to user");
+        }
+
+      free (name);
+    }
 }
 
 int
@@ -192,67 +365,6 @@ main (int argc,
   const char *display, *display_end;
 
   char tmpdir[] = "/tmp/run-app.XXXXXX";
-  static const struct {
-    file_type_t type;
-    const char *name;
-    mode_t mode;
-    const char *data;
-    file_flags_t flags;
-  } create[] = {
-    { FILE_TYPE_DIR, ".oldroot", 0755 },
-    { FILE_TYPE_DIR, "usr", 0755 },
-    { FILE_TYPE_DIR, "tmp", 01777 },
-    { FILE_TYPE_DIR, "self", 0755},
-    { FILE_TYPE_DIR, "run", 0755},
-    { FILE_TYPE_DIR, "run/user", 0755},
-    { FILE_TYPE_DIR, "run/user/%1$d", 0700, NULL, FILE_FLAGS_USER_OWNED },
-    { FILE_TYPE_DIR, "var", 0755},
-    { FILE_TYPE_SYMLINK, "var/tmp", 0755, "/tmp"},
-    { FILE_TYPE_SYMLINK, "lib", 0755, "usr/lib"},
-    { FILE_TYPE_SYMLINK, "bin", 0755, "usr/bin" },
-    { FILE_TYPE_SYMLINK, "sbin", 0755, "usr/sbin"},
-    { FILE_TYPE_SYMLINK, "etc", 0755, "usr/etc"},
-    { FILE_TYPE_DIR, "tmp/.X11-unix", 0755 },
-    { FILE_TYPE_REGULAR, "tmp/.X11-unix/X99", 0755 },
-    { FILE_TYPE_DIR, "proc", 0755},
-    { FILE_TYPE_MOUNT, "proc"},
-    { FILE_TYPE_BIND_RO, "proc/sys", 0755, "proc/sys"},
-    { FILE_TYPE_DIR, "sys", 0755},
-    { FILE_TYPE_MOUNT, "sys"},
-    { FILE_TYPE_DIR, "dev", 0755},
-    { FILE_TYPE_MOUNT, "dev"},
-    { FILE_TYPE_DIR, "dev/pts", 0755},
-    { FILE_TYPE_MOUNT, "dev/pts"},
-    { FILE_TYPE_DIR, "dev/shm", 0755},
-    { FILE_TYPE_MOUNT, "dev/shm"},
-    { FILE_TYPE_DEVICE, "dev/null", S_IFCHR|0666, "/dev/null"},
-    { FILE_TYPE_DEVICE, "dev/zero", S_IFCHR|0666, "/dev/zero"},
-    { FILE_TYPE_DEVICE, "dev/full", S_IFCHR|0666, "/dev/full"},
-    { FILE_TYPE_DEVICE, "dev/random", S_IFCHR|0666, "/dev/random"},
-    { FILE_TYPE_DEVICE, "dev/urandom", S_IFCHR|0666, "/dev/urandom"},
-    { FILE_TYPE_DEVICE, "dev/tty", S_IFCHR|0666, "/dev/tty"},
-    { FILE_TYPE_DIR, "dev/dri", 0755},
-    { FILE_TYPE_BIND, "dev/dri", 0755, "/dev/dri", FILE_FLAGS_NON_FATAL},
-  };
-
-  static const struct {
-    const char *what;
-    const char *where;
-    const char *type;
-    const char *options;
-    unsigned long flags;
-  }  mount_table[] = {
-    { "proc",      "proc",     "proc",  NULL,        MS_NOSUID|MS_NOEXEC|MS_NODEV           },
-    { "sysfs",     "sys",      "sysfs", NULL,        MS_RDONLY|MS_NOSUID|MS_NOEXEC|MS_NODEV },
-    { "tmpfs",     "dev",      "tmpfs", "mode=755",  MS_NOSUID|MS_STRICTATIME               },
-    { "devpts",    "dev/pts",  "devpts","newinstance,ptmxmode=0666,mode=620,gid=5", MS_NOSUID|MS_NOEXEC },
-    { "tmpfs",     "dev/shm",  "tmpfs", "mode=1777", MS_NOSUID|MS_NODEV|MS_STRICTATIME      },
-  };
-
-  char *dont_mounts[] = {
-    ".", "..", "lib", "lib64", "bin", "sbin", "usr", "boot",
-    "tmp", "etc", "self", "run", "proc", "sys", "dev", "var"
-  };
 
   args = &argv[1];
   n_args = argc - 1;
@@ -386,97 +498,7 @@ main (int argc,
   if (chdir (newroot) != 0)
       die_with_error ("chdir");
 
-  for (i = 0; i < N_ELEMENTS(create); i++)
-    {
-      int fd;
-      char *name = strdup_printf (create[i].name, getuid());
-      mode_t mode = create[i].mode;
-      const char *data = create[i].data;
-      file_flags_t flags = create[i].flags;
-      struct stat st;
-      int k;
-      int found;
-
-      switch (create[i].type)
-        {
-        case FILE_TYPE_DIR:
-          if (mkdir (name, mode) != 0)
-            die_with_error ("creating dir %s", name);
-          break;
-
-        case FILE_TYPE_REGULAR:
-          fd = creat (name, mode);
-          if (fd == -1)
-            die_with_error ("creating file %s", name);
-          close (fd);
-          break;
-
-        case FILE_TYPE_SYMLINK:
-          if (symlink (data, name) != 0)
-            die_with_error ("creating symlink %s", name);
-          break;
-
-        case FILE_TYPE_BIND:
-        case FILE_TYPE_BIND_RO:
-          if (mount (data, name, NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
-            {
-              if ((flags & FILE_FLAGS_NON_FATAL) == 0)
-                die_with_error ("mounting bindmount %s", name);
-            }
-          else if (create[i].type == FILE_TYPE_BIND_RO)
-            {
-              if (mount ("none", name,
-                         NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY, NULL) != 0)
-                die_with_error ("making bindmount %s readonly", name);
-            }
-
-          break;
-
-        case FILE_TYPE_MOUNT:
-          found = 0;
-          for (k = 0; k < N_ELEMENTS(mount_table); k++)
-            {
-              if (strcmp (mount_table[k].where, name) == 0)
-                {
-                  if (mount(mount_table[k].what,
-                            mount_table[k].where,
-                            mount_table[k].type,
-                            mount_table[k].flags,
-                            mount_table[k].options) < 0)
-                    die_with_error ("Mounting %s", name);
-                  found = 1;
-                }
-            }
-
-          if (!found)
-            die ("Unable to find mount %s\n", name);
-
-          break;
-
-        case FILE_TYPE_DEVICE:
-          if (stat (data, &st) < 0)
-            die_with_error ("stat node %s", data);
-
-          if (!S_ISCHR (st.st_mode) && !S_ISBLK (st.st_mode))
-            die_with_error ("node %s is not a device", data);
-
-          if (mknod (name, mode, st.st_rdev) < 0)
-            die_with_error ("mknod %s", name);
-
-          break;
-
-        default:
-          die ("Unknown create type %d\n", create[i].type);
-        }
-
-      if (flags & FILE_FLAGS_USER_OWNED)
-        {
-          if (chown (name, getuid(), -1))
-            die_with_error ("chown to user");
-        }
-
-      free (name);
-    }
+  create_files (create, N_ELEMENTS (create));
 
   if (mount (runtime_path, "usr",
              NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
@@ -583,9 +605,9 @@ main (int argc,
           char *path;
           struct stat st;
 
-          for (i = 0; i < N_ELEMENTS(dont_mounts); i++)
+          for (i = 0; i < N_ELEMENTS(dont_mount_in_root); i++)
             {
-              if (strcmp (dirent->d_name, dont_mounts[i]) == 0)
+              if (strcmp (dirent->d_name, dont_mount_in_root[i]) == 0)
                 {
                   dont_mount = 1;
                   break;
