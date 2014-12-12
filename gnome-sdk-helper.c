@@ -161,6 +161,7 @@ typedef enum {
   FILE_FLAGS_USER_OWNED = 1 << 0,
   FILE_FLAGS_NON_FATAL = 1 << 1,
   FILE_FLAGS_IF_LAST_FAILED = 1 << 2,
+  FILE_FLAGS_DEVICES = 1 << 3,
 } file_flags_t;
 
 typedef struct {
@@ -219,7 +220,7 @@ static const create_table_t create[] = {
   { FILE_TYPE_DEVICE, "dev/urandom", S_IFCHR|0666, "/dev/urandom"},
   { FILE_TYPE_DEVICE, "dev/tty", S_IFCHR|0666, "/dev/tty"},
   { FILE_TYPE_DIR, "dev/dri", 0755},
-  { FILE_TYPE_BIND, "dev/dri", 0755, "/dev/dri", FILE_FLAGS_NON_FATAL},
+  { FILE_TYPE_BIND, "dev/dri", 0755, "/dev/dri", FILE_FLAGS_NON_FATAL|FILE_FLAGS_DEVICES},
 };
 
 static const create_table_t create_post[] = {
@@ -240,6 +241,38 @@ const char *dont_mount_in_root[] = {
   "tmp", "etc", "self", "run", "proc", "sys", "dev", "var"
 };
 
+typedef enum {
+  BIND_READONLY = (1<<0),
+  BIND_PRIVATE = (1<<1),
+  BIND_DEVICES = (1<<2),
+  BIND_RECURSIVE = (1<<3),
+} bind_option_t;
+
+static int
+bind_mount (const char *src, const char *dest, bind_option_t options)
+{
+  int readonly = (options & BIND_READONLY) != 0;
+  int private = (options & BIND_PRIVATE) != 0;
+  int devices = (options & BIND_DEVICES) != 0;
+  int recursive = (options & BIND_RECURSIVE) != 0;
+
+  if (mount (src, dest, NULL, MS_MGC_VAL|MS_BIND|(recursive?MS_REC:0), NULL) != 0)
+    return 1;
+
+  if (private)
+    {
+      if (mount ("none", dest,
+                 NULL, MS_REC|MS_PRIVATE, NULL) != 0)
+        return 2;
+    }
+
+  if (mount ("none", dest,
+             NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|(devices?0:MS_NODEV)|MS_NOSUID|(readonly?MS_RDONLY:0), NULL) != 0)
+    return 3;
+
+  return 0;
+}
+
 static void
 create_files (const create_table_t *create, int n_create)
 {
@@ -256,6 +289,7 @@ create_files (const create_table_t *create, int n_create)
       struct stat st;
       int k;
       int found;
+      int res;
 
       if ((flags & FILE_FLAGS_IF_LAST_FAILED) &&
           !last_failed)
@@ -284,17 +318,14 @@ create_files (const create_table_t *create, int n_create)
 
         case FILE_TYPE_BIND:
         case FILE_TYPE_BIND_RO:
-          if (mount (data, name, NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
+          if ((res = bind_mount (data, name,
+                                 0 |
+                                 ((create[i].type == FILE_TYPE_BIND_RO) ? BIND_READONLY : 0) |
+                                 ((flags & FILE_FLAGS_DEVICES) ? BIND_DEVICES : 0))))
             {
-              if ((flags & FILE_FLAGS_NON_FATAL) == 0)
+              if (res > 1 || (flags & FILE_FLAGS_NON_FATAL) == 0)
                 die_with_error ("mounting bindmount %s", name);
               last_failed = 1;
-            }
-          else if (create[i].type == FILE_TYPE_BIND_RO)
-            {
-              if (mount ("none", name,
-                         NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_RDONLY, NULL) != 0)
-                die_with_error ("making bindmount %s readonly", name);
             }
 
           break;
@@ -388,8 +419,7 @@ mount_extra_root_dirs (void)
               if (mkdir (dirent->d_name, 0755) != 0)
                 die_with_error (dirent->d_name);
 
-              if (mount (path, dirent->d_name,
-                         NULL, MS_BIND|MS_REC|MS_MGC_VAL|MS_NOSUID, NULL) != 0)
+              if (bind_mount (path, dirent->d_name, BIND_RECURSIVE))
                 die_with_error ("mount root subdir %s", dirent->d_name);
             }
 
@@ -562,46 +592,19 @@ main (int argc,
 
   create_files (create, N_ELEMENTS (create));
 
-  if (mount (runtime_path, "usr",
-             NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
+  if (bind_mount (runtime_path, "usr", BIND_PRIVATE | (writable?0:BIND_READONLY)))
     die_with_error ("mount usr");
-
-  if (mount ("none", "usr",
-             NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-    die_with_error ("mount usr private");
-
-  if (mount ("none", "usr",
-             NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_NODEV|MS_NOSUID|(writable?0:MS_RDONLY), NULL) != 0)
-    die_with_error ("mount usr readonly");
 
   if (app_path != NULL)
     {
-      if (mount (app_path, "self",
-                 NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
+      if (bind_mount (app_path, "self", BIND_PRIVATE | (writable_app?0:BIND_READONLY)))
         die_with_error ("mount self");
-
-      if (mount ("none", "self",
-                 NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-        die_with_error ("mount self private");
-
-      if (mount ("none", "self",
-                 NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_NODEV|MS_NOSUID|(writable_app?0:MS_RDONLY), NULL) != 0)
-        die_with_error ("mount self readonly");
     }
 
   if (var_path != NULL)
     {
-      if (mount (var_path, "var",
-                 NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
+      if (bind_mount (var_path, "var", BIND_PRIVATE))
         die_with_error ("mount var");
-
-      if (mount ("none", "var",
-                 NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-        die_with_error ("mount var private");
-
-      if (mount ("none", "self",
-                 NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_NODEV|MS_NOSUID, NULL) != 0)
-        die_with_error ("mount var readonly");
     }
 
   create_files (create_post, N_ELEMENTS (create_post));
@@ -609,14 +612,11 @@ main (int argc,
   /* /usr now mounted private inside the namespace, tell child process to unmount the tmpfs in the parent namespace. */
   close (pipefd[WRITE_END]);
 
-  if (mount ("/etc/passwd", "etc/passwd",
-             NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+  if (bind_mount ("etc/passwd", "etc/passwd", BIND_READONLY))
     die_with_error ("mount passwd");
 
-  if (mount ("/etc/group", "etc/group",
-             NULL, MS_BIND|MS_MGC_VAL|MS_RDONLY|MS_NODEV|MS_NOSUID, NULL) != 0)
+  if (bind_mount ("etc/group", "etc/group", BIND_READONLY))
     die_with_error ("mount group");
-
 
   /* Bind mount in X socket
    * This is a bit iffy, as Xlib typically uses abstract unix domain sockets
@@ -644,7 +644,7 @@ main (int argc,
       if (stat (display_socket, &st) == 0 &&
           S_ISSOCK (st.st_mode))
         {
-          if (mount (display_socket, "tmp/.X11-unix/X99", NULL, MS_MGC_VAL|MS_BIND, NULL) == 0)
+          if (bind_mount (display_socket, "tmp/.X11-unix/X99", 0) == 0)
             display = ":99";
         }
     }
