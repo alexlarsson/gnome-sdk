@@ -131,7 +131,7 @@ strdup_printf (const char *format,
 void
 usage (char **argv)
 {
-  fprintf (stderr, "usage: %s [-i] [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
+  fprintf (stderr, "usage: %s [-i] [-p <pulsaudio socket>] [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
   exit (1);
 }
 
@@ -194,6 +194,8 @@ static const create_table_t create[] = {
   { FILE_TYPE_DIR, "run", 0755},
   { FILE_TYPE_DIR, "run/user", 0755},
   { FILE_TYPE_DIR, "run/user/%1$d", 0700, NULL, FILE_FLAGS_USER_OWNED },
+  { FILE_TYPE_DIR, "run/user/%1$d/pulse", 0700, NULL, FILE_FLAGS_USER_OWNED },
+  { FILE_TYPE_REGULAR, "run/user/%1$d/pulse/native", 0700, NULL, FILE_FLAGS_USER_OWNED },
   { FILE_TYPE_DIR, "var", 0755},
   { FILE_TYPE_SYMLINK, "var/tmp", 0755, "/tmp"},
   { FILE_TYPE_SYMLINK, "lib", 0755, "usr/lib"},
@@ -273,6 +275,40 @@ bind_mount (const char *src, const char *dest, bind_option_t options)
   return 0;
 }
 
+static int
+create_file (const char *path, mode_t mode, const char *content)
+{
+  int fd;
+
+  fd = creat (path, mode);
+  if (fd == -1)
+    return -1;
+
+  if (content)
+    {
+      ssize_t len = strlen (content);
+      ssize_t res;
+
+      while (len > 0)
+        {
+          res = write (fd, content, len);
+          if (res < 0 && errno == EINTR)
+            continue;
+          if (res <= 0)
+            {
+              close (fd);
+              return -1;
+            }
+          len -= res;
+          content += res;
+        }
+    }
+
+  close (fd);
+
+  return 0;
+}
+
 static void
 create_files (const create_table_t *create, int n_create)
 {
@@ -281,7 +317,6 @@ create_files (const create_table_t *create, int n_create)
 
   for (i = 0; i < n_create; i++)
     {
-      int fd;
       char *name = strdup_printf (create[i].name, getuid());
       mode_t mode = create[i].mode;
       const char *data = create[i].data;
@@ -305,10 +340,8 @@ create_files (const create_table_t *create, int n_create)
           break;
 
         case FILE_TYPE_REGULAR:
-          fd = creat (name, mode);
-          if (fd == -1)
+          if (create_file (name, mode, NULL))
             die_with_error ("creating file %s", name);
-          close (fd);
           break;
 
         case FILE_TYPE_SYMLINK:
@@ -441,6 +474,7 @@ main (int argc,
   char *runtime_path = NULL;
   char *app_path = NULL;
   char *var_path = NULL;
+  char *pulseaudio_socket = NULL;
   char *xdg_runtime_dir;
   char **args;
   int n_args;
@@ -482,6 +516,15 @@ main (int argc,
               usage (argv);
 
           app_path = args[1];
+          args += 2;
+          n_args -= 2;
+          break;
+
+        case 'p':
+          if (n_args < 2)
+              usage (argv);
+
+          pulseaudio_socket = args[1];
           args += 2;
           n_args -= 2;
           break;
@@ -657,6 +700,30 @@ main (int argc,
     {
       if (setenv("DISPLAY", display, 1))
         die ("oom");
+    }
+
+  if (pulseaudio_socket != NULL)
+    {
+      char *pulse_path_relative = strdup_printf ("run/user/%d/pulse/native", getuid());
+      char *pulse_server = strdup_printf ("unix:/run/user/%d/pulse/native", getuid());
+      char *config_path_relative = strdup_printf ("run/user/%d/pulse/config", getuid());
+      char *config_path_absolute = strdup_printf ("/run/user/%d/pulse/config", getuid());
+
+      if (create_file (config_path_relative, 0666, "enable-shm=no\n") == 0 &&
+          bind_mount (pulseaudio_socket, pulse_path_relative, BIND_READONLY) == 0)
+        {
+          setenv ("PULSE_SERVER", pulse_server, 1);
+          setenv ("PULSE_CLIENTCONFIG", config_path_absolute, 1);
+        }
+      else
+        {
+          unsetenv ("PULSE_SERVER");
+        }
+
+      free (pulse_path_relative);
+      free (pulse_server);
+      free (config_path_relative);
+      free (config_path_absolute);
     }
 
   if (!isolated)

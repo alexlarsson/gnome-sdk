@@ -147,4 +147,17 @@ fi
 # Ensure we always have /var/tmp
 mkdir -p $APP_DIR/var/tmp
 
-gnome-sdk-helper $ISOLATED -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
+if [ -z "$PULSE_SERVER" ]; then
+    XPROP=`xprop -root PULSE_SERVER`
+    case "$XPROP" in
+        PULSE_SERVER\(STRING\)*) PULSE_SERVER=`echo $XPROP | sed 's/PULSE_SERVER.* = //' | sed 's/"//'g`;;
+
+        *) if test -S $XDG_RUNTIME_DIR/pulse/native; then PULSE_SERVER="unix:$XDG_RUNTIME_DIR/pulse/native"; fi;;
+    esac
+fi
+
+case "$PULSE_SERVER" in
+  *unix:*) PULSEAUDIO="-p `echo $PULSE_SERVER | sed s#.*unix:##`"
+esac
+
+gnome-sdk-helper $PULSEAUDIO $ISOLATED -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
