@@ -593,15 +593,15 @@ main (int argc,
     {
       if (mount (var_path, "var",
                  NULL, MS_MGC_VAL|MS_BIND, NULL) != 0)
-        die_with_error ("mount self");
+        die_with_error ("mount var");
 
       if (mount ("none", "var",
                  NULL, MS_REC|MS_PRIVATE, NULL) != 0)
-        die_with_error ("mount self private");
+        die_with_error ("mount var private");
 
       if (mount ("none", "self",
                  NULL, MS_MGC_VAL|MS_BIND|MS_REMOUNT|MS_NODEV|MS_NOSUID, NULL) != 0)
-        die_with_error ("mount self readonly");
+        die_with_error ("mount var readonly");
     }
 
   create_files (create_post, N_ELEMENTS (create_post));
