@@ -411,6 +411,7 @@ main (int argc,
   char *runtime_path = NULL;
   char *app_path = NULL;
   char *var_path = NULL;
+  char *xdg_runtime_dir;
   char **args;
   int n_args;
   int isolated = 0;
@@ -684,6 +685,9 @@ main (int argc,
   setenv ("LD_LIBRARY_PATH", "/self/lib", 1);
   setenv ("XDG_CONFIG_DIRS","/self/etc/xdg:/etc/xdg", 1);
   setenv ("XDG_DATA_DIRS", "/self/share:/usr/share", 1);
+  xdg_runtime_dir = strdup_printf ("/run/user/%d", getuid());
+  setenv ("XDG_RUNTIME_DIR", xdg_runtime_dir, 1);
+  free (xdg_runtime_dir);
 
   __debug__(("launch executable %s\n", args[0]));
 
