@@ -131,7 +131,7 @@ strdup_printf (const char *format,
 void
 usage (char **argv)
 {
-  fprintf (stderr, "usage: %s [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
+  fprintf (stderr, "usage: %s [-i] [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
   exit (1);
 }
 
@@ -346,16 +346,65 @@ create_files (const create_table_t *create, int n_create)
     }
 }
 
+static void
+mount_extra_root_dirs (void)
+{
+  DIR *dir;
+  struct dirent *dirent;
+  int i;
+
+  /* Bind mount most dirs in / into the new root */
+  dir = opendir("/");
+  if (dir != NULL)
+    {
+      while ((dirent = readdir(dir)))
+        {
+          int dont_mount = 0;
+          char *path;
+          struct stat st;
+
+          for (i = 0; i < N_ELEMENTS(dont_mount_in_root); i++)
+            {
+              if (strcmp (dirent->d_name, dont_mount_in_root[i]) == 0)
+                {
+                  dont_mount = 1;
+                  break;
+                }
+            }
+
+          if (dont_mount)
+            continue;
+
+          path = strconcat ("/", dirent->d_name);
+
+          if (stat (path, &st) != 0)
+            {
+              free (path);
+              continue;
+            }
+
+          if (S_ISDIR(st.st_mode))
+            {
+              if (mkdir (dirent->d_name, 0755) != 0)
+                die_with_error (dirent->d_name);
+
+              if (mount (path, dirent->d_name,
+                         NULL, MS_BIND|MS_REC|MS_MGC_VAL|MS_NOSUID, NULL) != 0)
+                die_with_error ("mount root subdir %s", dirent->d_name);
+            }
+
+          free (path);
+        }
+    }
+}
+
 int
 main (int argc,
       char **argv)
 {
   int res;
-  int i;
   mode_t old_umask;
   char *newroot;
-  DIR *dir;
-  struct dirent *dirent;
   int pipefd[2];
   uid_t saved_euid;
   pid_t pid;
@@ -364,6 +413,7 @@ main (int argc,
   char *var_path = NULL;
   char **args;
   int n_args;
+  int isolated = 0;
   int writable = 0;
   int writable_app = 0;
   char old_cwd[256];
@@ -386,6 +436,12 @@ main (int argc,
 
         case 'w':
           writable_app = 1;
+          args += 1;
+          n_args -= 1;
+          break;
+
+        case 'i':
+          isolated = 1;
           args += 1;
           n_args -= 1;
           break;
@@ -602,49 +658,8 @@ main (int argc,
         die ("oom");
     }
 
-  /* Bind mount most dirs in / into the new root */
-  dir = opendir("/");
-  if (dir != NULL)
-    {
-      while ((dirent = readdir(dir)))
-        {
-          int dont_mount = 0;
-          char *path;
-          struct stat st;
-
-          for (i = 0; i < N_ELEMENTS(dont_mount_in_root); i++)
-            {
-              if (strcmp (dirent->d_name, dont_mount_in_root[i]) == 0)
-                {
-                  dont_mount = 1;
-                  break;
-                }
-            }
-
-          if (dont_mount)
-            continue;
-
-          path = strconcat ("/", dirent->d_name);
-
-          if (stat (path, &st) != 0)
-            {
-              free (path);
-              continue;
-            }
-
-          if (S_ISDIR(st.st_mode))
-            {
-              if (mkdir (dirent->d_name, 0755) != 0)
-                die_with_error (dirent->d_name);
-
-              if (mount (path, dirent->d_name,
-                         NULL, MS_BIND|MS_REC|MS_MGC_VAL|MS_NOSUID, NULL) != 0)
-                die_with_error ("mount root subdir %s", dirent->d_name);
-            }
-
-          free (path);
-        }
-    }
+  if (!isolated)
+    mount_extra_root_dirs ();
 
   if (pivot_root (newroot, ".oldroot"))
     die_with_error ("pivot_root");

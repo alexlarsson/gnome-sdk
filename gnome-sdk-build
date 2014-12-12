@@ -24,6 +24,7 @@ Runs a command in the gnome sdk runtime.
     -t, --target    run with the specified build dir in /self
     -c, --clear     clear the build dir before starting
     -v, --var       init /var from clean runtime Var companion
+    -i, --isolated  run isolated from filesystem
 
 All runtimes are stored in ${XDK_DATA_HOME}.
 The default sdk is called 'org.gnome.Sdk' and can be changed by setting GNOME_SDK_RUNTIME.
@@ -42,6 +43,7 @@ RUNTIME=${GNOME_SDK_RUNTIME:-org.gnome.Sdk}
 BRANCH=${GNOME_SDK_RUNTIME_BRANCH:-3.14}
 CLEAR=no
 VAR=no
+ISOLATED=
 
 while :; do
     case $1 in
@@ -89,6 +91,9 @@ while :; do
             ;;
         -v|--var)
             VAR=yes
+            ;;
+        -i|--isolated)
+            ISOLATED=-i
             ;;
         --)
             shift
@@ -142,4 +147,4 @@ fi
 # Ensure we always have /var/tmp
 mkdir -p $APP_DIR/var/tmp
 
-gnome-sdk-helper -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
+gnome-sdk-helper $ISOLATED -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
