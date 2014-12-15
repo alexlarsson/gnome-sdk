@@ -91,6 +91,21 @@ xmalloc (size_t size)
   return res;
 }
 
+static char *
+xstrdup (const char *str)
+{
+  char *res;
+
+  assert (str != NULL);
+
+  res = strdup (str);
+  if (res == NULL)
+    die ("oom");
+
+  return res;
+}
+
+
 char *
 strconcat (const char *s1,
            const char *s2)
@@ -301,6 +316,70 @@ bind_mount (const char *src, const char *dest, bind_option_t options)
 }
 
 static int
+mkdir_with_parents (const char *pathname,
+                    int         mode,
+                    int         uid)
+{
+  char *fn, *p;
+  struct stat buf;
+
+  if (pathname == NULL || *pathname == '\0')
+    {
+      errno = EINVAL;
+      return 1;
+    }
+
+  fn = xstrdup (pathname);
+
+  p = fn;
+  while (*p == '/')
+    p++;
+
+  do
+    {
+      while (*p && *p != '/')
+        p++;
+
+      if (!*p)
+        p = NULL;
+      else
+        *p = '\0';
+
+      if (stat (fn, &buf) !=  0)
+        {
+          if (mkdir (fn, mode) == -1 && errno != EEXIST)
+            {
+              int errsave = errno;
+              free (fn);
+              errno = errsave;
+              return -1;
+            }
+          if (chown (fn, uid, -1))
+            return -1;
+        }
+      else if (!S_ISDIR (buf.st_mode))
+        {
+          free (fn);
+          errno = ENOTDIR;
+          return -1;
+        }
+
+      if (p)
+        {
+          *p++ = '/';
+          while (*p && *p == '/')
+            p++;
+        }
+    }
+  while (p);
+
+  free (fn);
+
+  return 0;
+}
+
+
+static int
 create_file (const char *path, mode_t mode, const char *content)
 {
   int fd;
@@ -483,6 +562,30 @@ mount_extra_root_dirs (void)
 
           free (path);
         }
+    }
+}
+
+static void
+create_homedir (int do_mount)
+{
+  const char *home;
+  const char *relative_home;
+
+  home = getenv("HOME");
+  if (home == NULL)
+    return;
+
+  relative_home = home;
+  while (*relative_home == '/')
+    relative_home++;
+
+  if (mkdir_with_parents (relative_home, 0700, getuid()))
+    die_with_error ("unable to create %s", relative_home);
+
+  if (do_mount)
+    {
+      if (bind_mount (home, relative_home, BIND_RECURSIVE))
+        die_with_error ("unable to mount %s", home);
     }
 }
 
@@ -674,7 +777,8 @@ main (int argc,
   char **args;
   int n_args;
   int network = 0;
-  int isolated = 0;
+  int mount_host_fs = 0;
+  int mount_home = 0;
   int writable = 0;
   int writable_app = 0;
   char old_cwd[256];
@@ -707,8 +811,14 @@ main (int argc,
           n_args -= 1;
           break;
 
-        case 'i':
-          isolated = 1;
+        case 'f':
+          mount_host_fs = 1;
+          args += 1;
+          n_args -= 1;
+          break;
+
+        case 'H':
+          mount_home = 1;
           args += 1;
           n_args -= 1;
           break;
@@ -929,8 +1039,10 @@ main (int argc,
       free (config_path_absolute);
     }
 
-  if (!isolated)
+  if (mount_host_fs)
     mount_extra_root_dirs ();
+
+  create_homedir (!mount_host_fs && mount_home);
 
   if (!network)
     loopback_setup ();

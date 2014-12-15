@@ -34,6 +34,8 @@ esac
 RUNTIME_ALT="runtime"
 BRANCH=""
 NETWORK=
+MOUNT_HOST_FS=
+MOUNT_HOME=
 
 while :; do
     case $1 in
@@ -56,6 +58,12 @@ while :; do
             ;;
         -n|--network)
             NETWORK=-n
+            ;;
+        -f|--host-fs)
+            MOUNT_HOST_FS=-f
+            ;;
+        -H|--home)
+            MOUNT_HOME=-H
             ;;
         --)
             shift
@@ -108,4 +116,4 @@ RUNTIME_DIR="${DEPLOY}/runtime/${RUNTIME}/deploy/latest/files"
 
 touch $APPDIR/.ref
 
-gnome-sdk-helper -a $APPDIR $NETWORK $RUNTIME_DIR "$@"
+gnome-sdk-helper -a $APPDIR $MOUNT_HOST_FS $MOUNT_HOME $NETWORK $RUNTIME_DIR "$@"

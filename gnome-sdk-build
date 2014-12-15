@@ -44,7 +44,7 @@ RUNTIME=${GNOME_SDK_RUNTIME:-org.gnome.Sdk}
 BRANCH=${GNOME_SDK_RUNTIME_BRANCH:-3.14}
 CLEAR=no
 VAR=no
-ISOLATED=
+ISOLATED=-H
 NETWORK=
 
 while :; do
@@ -95,7 +95,7 @@ while :; do
             VAR=yes
             ;;
         -i|--isolated)
-            ISOLATED=-i
+            ISOLATED=
             ;;
         -n|--network)
             NETWORK=-n
