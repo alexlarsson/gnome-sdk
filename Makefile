@@ -4,7 +4,7 @@ BINDIR ?= ${PREFIX}/bin
 all: gnome-sdk-helper
 
 gnome-sdk-helper: gnome-sdk-helper.c
-	gcc -o gnome-sdk-helper gnome-sdk-helper.c -O -Wall
+	gcc -o gnome-sdk-helper gnome-sdk-helper.c -g -O -Wall
 
 install: gnome-sdk-helper gnome-sdk-build gnome-sdk-run gnome-sdk-repo
 	install -D gnome-sdk-build ${DESTDIR}${BINDIR}
