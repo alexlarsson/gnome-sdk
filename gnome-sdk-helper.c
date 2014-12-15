@@ -194,6 +194,7 @@ typedef enum {
   FILE_TYPE_BIND_RO,
   FILE_TYPE_MOUNT,
   FILE_TYPE_DEVICE,
+  FILE_TYPE_SHM,
 } file_type_t;
 
 typedef enum {
@@ -254,7 +255,7 @@ static const create_table_t create[] = {
   { FILE_TYPE_DIR, "dev/pts", 0755},
   { FILE_TYPE_MOUNT, "dev/pts"},
   { FILE_TYPE_DIR, "dev/shm", 0755},
-  { FILE_TYPE_MOUNT, "dev/shm"},
+  { FILE_TYPE_SHM, "dev/shm"},
   { FILE_TYPE_DEVICE, "dev/null", S_IFCHR|0666, "/dev/null"},
   { FILE_TYPE_DEVICE, "dev/zero", S_IFCHR|0666, "/dev/zero"},
   { FILE_TYPE_DEVICE, "dev/full", S_IFCHR|0666, "/dev/full"},
@@ -414,7 +415,7 @@ create_file (const char *path, mode_t mode, const char *content)
 }
 
 static void
-create_files (const create_table_t *create, int n_create)
+create_files (const create_table_t *create, int n_create, int ignore_shm)
 {
   int last_failed = 0;
   int i;
@@ -467,6 +468,11 @@ create_files (const create_table_t *create, int n_create)
 
           break;
 
+        case FILE_TYPE_SHM:
+          if (ignore_shm)
+            break;
+
+          /* NOTE: Fall through, treat as mount */
         case FILE_TYPE_MOUNT:
           found = 0;
           for (k = 0; k < N_ELEMENTS(mount_table); k++)
@@ -777,6 +783,7 @@ main (int argc,
   char *xdg_runtime_dir;
   char **args;
   int n_args;
+  int share_shm = 0;
   int network = 0;
   int mount_host_fs = 0;
   int mount_home = 0;
@@ -807,6 +814,12 @@ main (int argc,
 
         case 'w':
           writable_app = 1;
+          args += 1;
+          n_args -= 1;
+          break;
+
+        case 's':
+          share_shm = 1;
           args += 1;
           n_args -= 1;
           break;
@@ -955,7 +968,13 @@ main (int argc,
   if (chdir (newroot) != 0)
       die_with_error ("chdir");
 
-  create_files (create, N_ELEMENTS (create));
+  create_files (create, N_ELEMENTS (create), share_shm);
+
+  if (share_shm)
+    {
+      if (bind_mount ("/dev/shm", "dev/shm", BIND_DEVICES))
+        die_with_error ("mount /dev/shm");
+    }
 
   if (bind_mount (runtime_path, "usr", BIND_PRIVATE | (writable?0:BIND_READONLY)))
     die_with_error ("mount usr");
@@ -972,7 +991,7 @@ main (int argc,
         die_with_error ("mount var");
     }
 
-  create_files (create_post, N_ELEMENTS (create_post));
+  create_files (create_post, N_ELEMENTS (create_post), share_shm);
 
   /* /usr now mounted private inside the namespace, tell child process to unmount the tmpfs in the parent namespace. */
   close (pipefd[WRITE_END]);
@@ -1014,8 +1033,9 @@ main (int argc,
       char *pulse_server = strdup_printf ("unix:/run/user/%d/pulse/native", getuid());
       char *config_path_relative = strdup_printf ("run/user/%d/pulse/config", getuid());
       char *config_path_absolute = strdup_printf ("/run/user/%d/pulse/config", getuid());
+      char *client_config = strdup_printf ("enable-shm=%s\n", share_shm ? "yes" : "no");
 
-      if (create_file (config_path_relative, 0666, "enable-shm=no\n") == 0 &&
+      if (create_file (config_path_relative, 0666, client_config) == 0 &&
           bind_mount (pulseaudio_socket, pulse_path_relative, BIND_READONLY) == 0)
         {
           setenv ("PULSE_SERVER", pulse_server, 1);
@@ -1030,7 +1050,8 @@ main (int argc,
       free (pulse_server);
       free (config_path_relative);
       free (config_path_absolute);
-    }
+      free (client_config);
+   }
 
   if (mount_host_fs)
     mount_extra_root_dirs ();

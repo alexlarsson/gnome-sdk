@@ -26,6 +26,7 @@ Runs a command in the gnome sdk runtime.
     -v, --var       init /var from clean runtime Var companion
     -i, --isolated  run isolated from filesystem
     -n, --network   run with host network
+    -s, --share-shm share /dev/shm with host
 
 All runtimes are stored in ${XDK_DATA_HOME}.
 The default sdk is called 'org.gnome.Sdk' and can be changed by setting GNOME_SDK_RUNTIME.
@@ -96,6 +97,9 @@ while :; do
             ;;
         -i|--isolated)
             ISOLATED=
+            ;;
+        -s|--share-shm)
+            SHM=-s
             ;;
         -n|--network)
             NETWORK=-n
@@ -172,4 +176,4 @@ case "$PULSE_SERVER" in
   *unix:*) PULSEAUDIO="-p `echo $PULSE_SERVER | sed s#.*unix:##`"
 esac
 
-gnome-sdk-helper $X11 $PULSEAUDIO $ISOLATED $NETWORK -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
+gnome-sdk-helper $SHM $X11 $PULSEAUDIO $ISOLATED $NETWORK -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
