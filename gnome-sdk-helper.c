@@ -1,19 +1,44 @@
+/* gnome-sdk-helper
+ * Copyright (C) 2014 Alexander Larsson
+ *
+ * This probram is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library. If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
 #define _GNU_SOURCE /* Required for CLONE_NEWNS */
-#include <sys/mount.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/syscall.h>
+#include <assert.h>
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <linux/loop.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <sched.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <dirent.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mount.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #if 0
 #define __debug__(x) printf x
@@ -131,7 +156,7 @@ strdup_printf (const char *format,
 void
 usage (char **argv)
 {
-  fprintf (stderr, "usage: %s [-i] [-p <pulsaudio socket>] [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
+  fprintf (stderr, "usage: %s [-n] [-i] [-p <pulsaudio socket>] [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
   exit (1);
 }
 
@@ -461,6 +486,176 @@ mount_extra_root_dirs (void)
     }
 }
 
+static void *
+add_rta (struct nlmsghdr *header, int type, size_t size)
+{
+  struct rtattr *rta;
+  size_t rta_size = RTA_LENGTH(size);
+
+  rta = (struct rtattr*)((char *)header + NLMSG_ALIGN(header->nlmsg_len));
+  rta->rta_type = type;
+  rta->rta_len = rta_size;
+
+  header->nlmsg_len = NLMSG_ALIGN(header->nlmsg_len) + rta_size;
+
+  return RTA_DATA(rta);
+}
+
+static int
+rtnl_send_request (int rtnl_fd, struct nlmsghdr *header)
+{
+  struct sockaddr_nl dst_addr = { AF_NETLINK, 0 };
+  ssize_t sent;
+
+  sent = sendto (rtnl_fd, (void *)header, header->nlmsg_len, 0,
+                 (struct sockaddr *)&dst_addr, sizeof (dst_addr));
+  if (sent < 0)
+    return 1;
+
+  return 0;
+}
+
+static int
+rtnl_read_reply (int rtnl_fd, int seq_nr)
+{
+  char buffer[1024];
+  ssize_t received;
+  struct nlmsghdr *rheader;
+
+  while (1)
+    {
+      received = recv (rtnl_fd, buffer, sizeof(buffer), 0);
+      if (received < 0)
+        return 1;
+
+      rheader = (struct nlmsghdr *)buffer;
+      while (received >= NLMSG_HDRLEN)
+        {
+          if (rheader->nlmsg_seq != seq_nr)
+            return 1;
+          if (rheader->nlmsg_pid != getpid ())
+            return 1;
+          if (rheader->nlmsg_type == NLMSG_ERROR)
+            {
+              uint32_t err = NLMSG_DATA(rheader);
+              if (err == 0)
+                return 0;
+
+              return 1;
+            }
+          if (rheader->nlmsg_type == NLMSG_DONE)
+            return 0;
+
+          rheader = NLMSG_NEXT(rheader, received);
+        }
+    }
+}
+
+static int
+rtnl_do_request (int rtnl_fd, struct nlmsghdr *header)
+{
+  if (!rtnl_send_request (rtnl_fd, header))
+    return 1;
+
+  if (!rtnl_read_reply (rtnl_fd, header->nlmsg_seq))
+    return 1;
+
+  return 0;
+}
+
+static struct nlmsghdr *
+rtnl_setup_request (char *buffer, int type, int flags, size_t size)
+{
+  struct nlmsghdr *header;
+  size_t len = NLMSG_LENGTH (size);
+  static uint32_t counter = 0;
+
+  memset (buffer, 0, len);
+
+  header = (struct nlmsghdr *)buffer;
+  header->nlmsg_len = len;
+  header->nlmsg_type = type;
+  header->nlmsg_flags = flags | NLM_F_REQUEST;
+  header->nlmsg_seq = counter++;
+  header->nlmsg_pid = getpid ();
+
+  return (struct nlmsghdr *)header;
+}
+
+static int
+loopback_setup (void)
+{
+  int r, if_loopback;
+  int rtnl_fd = -1;
+  char buffer[1024];
+  struct sockaddr_nl src_addr = { AF_NETLINK, 0 };
+  struct nlmsghdr *header;
+  struct ifaddrmsg *addmsg;
+  struct ifinfomsg *infomsg;
+  struct in_addr *ip_addr;
+  int res = 1;
+
+  src_addr.nl_pid = getpid ();
+
+  if_loopback = (int) if_nametoindex ("lo");
+  if (if_loopback <= 0)
+    goto error;
+
+  rtnl_fd = socket (PF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE);
+  if (rtnl_fd < 0)
+    goto error;
+
+  r = bind (rtnl_fd, (struct sockaddr *)&src_addr, sizeof (src_addr));
+  if (r < 0)
+    goto error;
+
+  header = rtnl_setup_request (buffer, RTM_NEWADDR,
+                               NLM_F_CREATE|NLM_F_EXCL|NLM_F_ACK,
+                               sizeof (struct ifaddrmsg));
+  addmsg = NLMSG_DATA(header);
+
+  addmsg->ifa_family = AF_INET;
+  addmsg->ifa_prefixlen = 8;
+  addmsg->ifa_flags = IFA_F_PERMANENT;
+  addmsg->ifa_scope = RT_SCOPE_HOST;
+  addmsg->ifa_index = if_loopback;
+
+  ip_addr = add_rta (header, IFA_LOCAL, sizeof (*ip_addr));
+  ip_addr->s_addr = htonl(INADDR_LOOPBACK);
+
+  ip_addr = add_rta (header, IFA_ADDRESS, sizeof (*ip_addr));
+  ip_addr->s_addr = htonl(INADDR_LOOPBACK);
+
+  assert (header->nlmsg_len < sizeof (buffer));
+
+  if (rtnl_do_request (rtnl_fd, header))
+    goto error;
+
+  header = rtnl_setup_request (buffer, RTM_NEWLINK,
+                               NLM_F_ACK,
+                               sizeof (struct ifinfomsg));
+  infomsg = NLMSG_DATA(header);
+
+  infomsg->ifi_family = AF_UNSPEC;
+  infomsg->ifi_type = 0;
+  infomsg->ifi_index = if_loopback;
+  infomsg->ifi_flags = IFF_UP;
+  infomsg->ifi_change = IFF_UP;
+
+  assert (header->nlmsg_len < sizeof (buffer));
+
+  if (rtnl_do_request (rtnl_fd, header))
+    goto error;
+
+  res = 0;
+
+ error:
+  if (rtnl_fd != -1)
+    close (rtnl_fd);
+
+  return res;
+}
+
 int
 main (int argc,
       char **argv)
@@ -478,6 +673,7 @@ main (int argc,
   char *xdg_runtime_dir;
   char **args;
   int n_args;
+  int network = 0;
   int isolated = 0;
   int writable = 0;
   int writable_app = 0;
@@ -493,6 +689,12 @@ main (int argc,
     {
       switch (args[0][1])
         {
+        case 'n':
+          network = 1;
+          args += 1;
+          n_args -= 1;
+          break;
+
         case 'W':
           writable = 1;
           args += 1;
@@ -612,7 +814,8 @@ main (int argc,
   close (pipefd[READ_END]);
 
   __debug__(("creating new namespace\n"));
-  res = unshare (CLONE_NEWNS);
+  res = unshare (CLONE_NEWNS |
+                 (network ? 0 : CLONE_NEWNET));
   if (res != 0)
     die_with_error ("Creating new namespace failed");
 
@@ -728,6 +931,9 @@ main (int argc,
 
   if (!isolated)
     mount_extra_root_dirs ();
+
+  if (!network)
+    loopback_setup ();
 
   if (pivot_root (newroot, ".oldroot"))
     die_with_error ("pivot_root");

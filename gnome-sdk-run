@@ -10,6 +10,7 @@ Runs a command in the gnome sdk runtime.
 
     -h              show this help
     -d, --devel     run with development runtime
+    -n, --network   run with host network
 
 Apps and runtimes are stored in ${XDG_DATA_HOME}.
 EOF
@@ -32,6 +33,7 @@ esac
 
 RUNTIME_ALT="runtime"
 BRANCH=""
+NETWORK=
 
 while :; do
     case $1 in
@@ -51,6 +53,9 @@ while :; do
                 echo 'ERROR: Must specify a non-empty "--branch branch" argument.' >&2
                 exit 1
             fi
+            ;;
+        -n|--network)
+            NETWORK=-n
             ;;
         --)
             shift
@@ -103,4 +108,4 @@ RUNTIME_DIR="${DEPLOY}/runtime/${RUNTIME}/deploy/latest/files"
 
 touch $APPDIR/.ref
 
-gnome-sdk-helper -a $APPDIR $RUNTIME_DIR "$@"
+gnome-sdk-helper -a $APPDIR $NETWORK $RUNTIME_DIR "$@"
