@@ -171,7 +171,7 @@ strdup_printf (const char *format,
 void
 usage (char **argv)
 {
-  fprintf (stderr, "usage: %s [-n] [-i] [-p <pulsaudio socket>] [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
+  fprintf (stderr, "usage: %s [-n] [-i] [-p <pulsaudio socket>] [-x X11 socket] [-w] [-W] [-a <path to app>] [-v <path to var>] <path to runtime> <command..>\n", argv[0]);
   exit (1);
 }
 
@@ -773,6 +773,7 @@ main (int argc,
   char *app_path = NULL;
   char *var_path = NULL;
   char *pulseaudio_socket = NULL;
+  char *x11_socket = NULL;
   char *xdg_runtime_dir;
   char **args;
   int n_args;
@@ -782,7 +783,6 @@ main (int argc,
   int writable = 0;
   int writable_app = 0;
   char old_cwd[256];
-  const char *display, *display_end;
 
   char tmpdir[] = "/tmp/run-app.XXXXXX";
 
@@ -837,6 +837,15 @@ main (int argc,
               usage (argv);
 
           pulseaudio_socket = args[1];
+          args += 2;
+          n_args -= 2;
+          break;
+
+        case 'x':
+          if (n_args < 2)
+              usage (argv);
+
+          x11_socket = args[1];
           args += 2;
           n_args -= 2;
           break;
@@ -981,38 +990,22 @@ main (int argc,
    * to global abstract unix domain sockets are still accessible to the app
    * though...
    */
-  display = getenv ("DISPLAY");
-  if (display != NULL &&
-      /* Only handle local displays */
-      display[0] == ':' && ascii_isdigit (display[1]))
+  if (x11_socket)
     {
-      const char *display_socket;
       struct stat st;
 
-      display++;
-      display_end = display;
-      while (ascii_isdigit (*display_end))
-        display_end++;
-
-      display_socket = strconcat_len ("/tmp/.X11-unix/X", display, display_end - display);
-      display = NULL;
-
-      if (stat (display_socket, &st) == 0 &&
-          S_ISSOCK (st.st_mode))
+      if (stat (x11_socket, &st) == 0 && S_ISSOCK (st.st_mode))
         {
-          if (bind_mount (display_socket, "tmp/.X11-unix/X99", 0) == 0)
-            display = ":99";
-        }
-    }
-  else
-    display = NULL;
+          if (bind_mount (x11_socket, "tmp/.X11-unix/X99", 0))
+            die ("can't bind X11 socket");
 
-  if (display == NULL)
-    unsetenv ("DISPLAY");
-  else
-    {
-      if (setenv("DISPLAY", display, 1))
-        die ("oom");
+          if (setenv("DISPLAY", ":99.0", 1))
+            die ("oom");
+        }
+      else
+        {
+          unsetenv ("DISPLAY");
+        }
     }
 
   if (pulseaudio_socket != NULL)

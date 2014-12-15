@@ -116,4 +116,25 @@ RUNTIME_DIR="${DEPLOY}/runtime/${RUNTIME}/deploy/latest/files"
 
 touch $APPDIR/.ref
 
-gnome-sdk-helper -a $APPDIR $MOUNT_HOST_FS $MOUNT_HOME $NETWORK $RUNTIME_DIR "$@"
+X11=""
+case "$DISPLAY" in
+  :[0-9]*)  D=`echo $DISPLAY | sed "s/.*:\([0-9]*\).*/\1/"`;
+            X11="-x /tmp/.X11-unix/X$D" ;;
+esac;
+
+PULSEAUDIO=""
+if [ -z "$PULSE_SERVER" ]; then
+    XPROP=`xprop -root PULSE_SERVER`
+    case "$XPROP" in
+        PULSE_SERVER\(STRING\)*) PULSE_SERVER=`echo $XPROP | sed 's/PULSE_SERVER.* = //' | sed 's/"//'g`;;
+
+        *) if test -S $XDG_RUNTIME_DIR/pulse/native; then PULSE_SERVER="unix:$XDG_RUNTIME_DIR/pulse/native"; fi;;
+    esac
+fi
+
+case "$PULSE_SERVER" in
+  *unix:*) PULSEAUDIO="-p `echo $PULSE_SERVER | sed s#.*unix:##`"
+esac
+
+
+gnome-sdk-helper $PULSEAUDIO $X11 -a $APPDIR $MOUNT_HOST_FS $MOUNT_HOME $NETWORK $RUNTIME_DIR "$@"

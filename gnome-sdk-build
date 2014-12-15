@@ -152,6 +152,13 @@ fi
 # Ensure we always have /var/tmp
 mkdir -p $APP_DIR/var/tmp
 
+X11=""
+case "$DISPLAY" in
+  :[0-9]*)  D=`echo $DISPLAY | sed "s/.*:\([0-9]*\).*/\1/"`;
+            X11="-x /tmp/.X11-unix/X$D" ;;
+esac;
+
+PULSEAUDIO=
 if [ -z "$PULSE_SERVER" ]; then
     XPROP=`xprop -root PULSE_SERVER`
     case "$XPROP" in
@@ -165,4 +172,4 @@ case "$PULSE_SERVER" in
   *unix:*) PULSEAUDIO="-p `echo $PULSE_SERVER | sed s#.*unix:##`"
 esac
 
-gnome-sdk-helper $PULSEAUDIO $ISOLATED $NETWORK -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
+gnome-sdk-helper $X11 $PULSEAUDIO $ISOLATED $NETWORK -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
