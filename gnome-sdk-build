@@ -211,4 +211,4 @@ if [ $SESSION_DBUS != "no" ]; then
     esac
 fi
 
-gnome-sdk-helper $SHM $X11 $SESSION_DBUS_OPTION $SYSTEM_DBUS_OPTION $PULSEAUDIO $ISOLATED $NETWORK -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
+gnome-sdk-helper -i $SHM $X11 $SESSION_DBUS_OPTION $SYSTEM_DBUS_OPTION $PULSEAUDIO $ISOLATED $NETWORK -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"

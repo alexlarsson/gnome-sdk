@@ -802,6 +802,7 @@ main (int argc,
   int n_args;
   int share_shm = 0;
   int network = 0;
+  int ipc = 0;
   int mount_host_fs = 0;
   int mount_home = 0;
   int writable = 0;
@@ -817,6 +818,12 @@ main (int argc,
     {
       switch (args[0][1])
         {
+        case 'i':
+          ipc = 1;
+          args += 1;
+          n_args -= 1;
+          break;
+
         case 'n':
           network = 1;
           args += 1;
@@ -982,7 +989,8 @@ main (int argc,
 
   __debug__(("creating new namespace\n"));
   res = unshare (CLONE_NEWNS |
-                 (network ? 0 : CLONE_NEWNET));
+                 (network ? 0 : CLONE_NEWNET) |
+                 (ipc ? 0 : CLONE_NEWIPC));
   if (res != 0)
     die_with_error ("Creating new namespace failed");
 
