@@ -246,6 +246,7 @@ static const create_table_t create[] = {
   { FILE_TYPE_DIR, "tmp", 01777 },
   { FILE_TYPE_DIR, "self", 0755},
   { FILE_TYPE_DIR, "run", 0755},
+  { FILE_TYPE_DIR, "run/dbus", 0755},
   { FILE_TYPE_DIR, "run/user", 0755},
   { FILE_TYPE_DIR, "run/user/%1$d", 0700, NULL, FILE_FLAGS_USER_OWNED },
   { FILE_TYPE_DIR, "run/user/%1$d/pulse", 0700, NULL, FILE_FLAGS_USER_OWNED },
@@ -794,6 +795,8 @@ main (int argc,
   char *var_path = NULL;
   char *pulseaudio_socket = NULL;
   char *x11_socket = NULL;
+  char *system_dbus_socket = NULL;
+  char *session_dbus_socket = NULL;
   char *xdg_runtime_dir;
   char **args;
   int n_args;
@@ -873,6 +876,24 @@ main (int argc,
               usage (argv);
 
           x11_socket = args[1];
+          args += 2;
+          n_args -= 2;
+          break;
+
+        case 'd':
+          if (n_args < 2)
+              usage (argv);
+
+          session_dbus_socket = args[1];
+          args += 2;
+          n_args -= 2;
+          break;
+
+        case 'D':
+          if (n_args < 2)
+              usage (argv);
+
+          system_dbus_socket = args[1];
           args += 2;
           n_args -= 2;
           break;
@@ -1064,6 +1085,30 @@ main (int argc,
       free (config_path_relative);
       free (config_path_absolute);
       free (client_config);
+   }
+
+  if (system_dbus_socket != NULL)
+    {
+      if (create_file ("run/dbus/system_bus_socket", 0666, NULL) == 0 &&
+          bind_mount (system_dbus_socket, "run/dbus/system_bus_socket", 0) == 0)
+        xsetenv ("DBUS_SYSTEM_BUS_ADDRESS",  "unix:path=/var/run/dbus/system_bus_socket", 1);
+      else
+        xunsetenv ("DBUS_SYSTEM_BUS_ADDRESS");
+   }
+
+  if (session_dbus_socket != NULL)
+    {
+      char *session_dbus_socket_path_relative = strdup_printf ("run/user/%d/bus", getuid());
+      char *session_dbus_address = strdup_printf ("unix:path=/run/user/%d/bus", getuid());
+
+      if (create_file (session_dbus_socket_path_relative, 0666, NULL) == 0 &&
+          bind_mount (session_dbus_socket, session_dbus_socket_path_relative, 0) == 0)
+        xsetenv ("DBUS_SESSION_BUS_ADDRESS",  session_dbus_address, 1);
+      else
+        xunsetenv ("DBUS_SESSION_BUS_ADDRESS");
+
+      free (session_dbus_socket_path_relative);
+      free (session_dbus_address);
    }
 
   if (mount_host_fs)

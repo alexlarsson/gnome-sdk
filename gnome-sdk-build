@@ -27,6 +27,8 @@ Runs a command in the gnome sdk runtime.
     -i, --isolated  run isolated from filesystem
     -n, --network   run with host network
     -s, --share-shm share /dev/shm with host
+    -D, --system-bus share system bus in container
+    -d, --session-bus share session bus in container
 
 All runtimes are stored in ${XDK_DATA_HOME}.
 The default sdk is called 'org.gnome.Sdk' and can be changed by setting GNOME_SDK_RUNTIME.
@@ -47,6 +49,10 @@ CLEAR=no
 VAR=no
 ISOLATED=-H
 NETWORK=
+SYSTEM_DBUS=no
+SYSTEM_DBUS_OPTION=
+SESSION_DBUS=no
+SESSION_DBUS_OPTION=
 
 while :; do
     case $1 in
@@ -104,6 +110,12 @@ while :; do
         -n|--network)
             NETWORK=-n
             ;;
+        -D|--system-bus)
+            SYSTEM_DBUS=yes
+            ;;
+        -d|--session-bus)
+            SESSION_DBUS=yes
+            ;;
         --)
             shift
             break
@@ -153,8 +165,9 @@ if [ $VAR != "no" ]; then
     cp -a -T  $VAR_DIR $APP_DIR/var
 fi
 
-# Ensure we always have /var/tmp
+# Ensure we always have /var/tmp and /var/run
 mkdir -p $APP_DIR/var/tmp
+ln -snf /run $APP_DIR/var/run
 
 X11=""
 case "$DISPLAY" in
@@ -176,4 +189,26 @@ case "$PULSE_SERVER" in
   *unix:*) PULSEAUDIO="-p `echo $PULSE_SERVER | sed s#.*unix:##`"
 esac
 
-gnome-sdk-helper $SHM $X11 $PULSEAUDIO $ISOLATED $NETWORK -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
+if [ $SYSTEM_DBUS != "no" ]; then
+    case $DBUS_SYSTEM_BUS_ADDRESS in
+        unix:*path=*)
+            # TODO: This should unescape the path
+            SOCKET=`echo $DBUS_SYSTEM_BUS_ADDRESS | sed "s/unix:.*path=\(.*\)\(,.*\|$\)/\1/"`;
+            SYSTEM_DBUS_OPTION="-D $SOCKET"
+            ;;
+        "")  SYSTEM_DBUS_OPTION="-D /var/run/dbus/system_bus_socket"
+            ;;
+    esac
+fi
+
+if [ $SESSION_DBUS != "no" ]; then
+    case $DBUS_SESSION_BUS_ADDRESS in
+        unix:*path=*)
+            # TODO: This should unescape the path
+            SOCKET=`echo $DBUS_SESSION_BUS_ADDRESS | sed "s/unix:.*path=\(.*\)\(,.*\|$\)/\1/"`;
+            SESSION_DBUS_OPTION="-d $SOCKET"
+            ;;
+    esac
+fi
+
+gnome-sdk-helper $SHM $X11 $SESSION_DBUS_OPTION $SYSTEM_DBUS_OPTION $PULSEAUDIO $ISOLATED $NETWORK -w -a $APP_DIR/files -v $APP_DIR/var $RUNTIME_DIR "$@"
