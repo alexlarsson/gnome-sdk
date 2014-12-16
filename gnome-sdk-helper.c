@@ -105,6 +105,12 @@ xstrdup (const char *str)
   return res;
 }
 
+static void
+xsetenv (const char *name, const char *value, int overwrite)
+{
+  if (setenv (name, value, overwrite))
+    die ("oom");
+}
 
 char *
 strconcat (const char *s1,
@@ -1018,8 +1024,7 @@ main (int argc,
           if (bind_mount (x11_socket, "tmp/.X11-unix/X99", 0))
             die ("can't bind X11 socket");
 
-          if (setenv("DISPLAY", ":99.0", 1))
-            die ("oom");
+          xsetenv ("DISPLAY", ":99.0", 1);
         }
       else
         {
@@ -1038,8 +1043,8 @@ main (int argc,
       if (create_file (config_path_relative, 0666, client_config) == 0 &&
           bind_mount (pulseaudio_socket, pulse_path_relative, BIND_READONLY) == 0)
         {
-          setenv ("PULSE_SERVER", pulse_server, 1);
-          setenv ("PULSE_CLIENTCONFIG", config_path_absolute, 1);
+          xsetenv ("PULSE_SERVER", pulse_server, 1);
+          xsetenv ("PULSE_CLIENTCONFIG", config_path_absolute, 1);
         }
       else
         {
@@ -1080,12 +1085,12 @@ main (int argc,
 
   chdir (old_cwd);
 
-  setenv ("PATH", "/self/bin:/usr/bin", 1);
-  setenv ("LD_LIBRARY_PATH", "/self/lib", 1);
-  setenv ("XDG_CONFIG_DIRS","/self/etc/xdg:/etc/xdg", 1);
-  setenv ("XDG_DATA_DIRS", "/self/share:/usr/share", 1);
+  xsetenv ("PATH", "/self/bin:/usr/bin", 1);
+  xsetenv ("LD_LIBRARY_PATH", "/self/lib", 1);
+  xsetenv ("XDG_CONFIG_DIRS","/self/etc/xdg:/etc/xdg", 1);
+  xsetenv ("XDG_DATA_DIRS", "/self/share:/usr/share", 1);
   xdg_runtime_dir = strdup_printf ("/run/user/%d", getuid());
-  setenv ("XDG_RUNTIME_DIR", xdg_runtime_dir, 1);
+  xsetenv ("XDG_RUNTIME_DIR", xdg_runtime_dir, 1);
   free (xdg_runtime_dir);
 
   __debug__(("launch executable %s\n", args[0]));
