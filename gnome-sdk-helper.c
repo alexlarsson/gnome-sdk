@@ -109,7 +109,14 @@ static void
 xsetenv (const char *name, const char *value, int overwrite)
 {
   if (setenv (name, value, overwrite))
-    die ("oom");
+    die ("setenv failed");
+}
+
+static void
+xunsetenv (const char *name)
+{
+  if (unsetenv(name))
+    die ("unsetenv failed");
 }
 
 char *
@@ -1029,7 +1036,7 @@ main (int argc,
         }
       else
         {
-          unsetenv ("DISPLAY");
+          xunsetenv ("DISPLAY");
         }
     }
 
@@ -1049,7 +1056,7 @@ main (int argc,
         }
       else
         {
-          unsetenv ("PULSE_SERVER");
+          xunsetenv ("PULSE_SERVER");
         }
 
       free (pulse_path_relative);
