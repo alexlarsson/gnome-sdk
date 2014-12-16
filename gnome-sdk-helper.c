@@ -245,6 +245,7 @@ static const create_table_t create[] = {
   { FILE_TYPE_REGULAR, "run/user/%1$d/pulse/native", 0700, NULL, FILE_FLAGS_USER_OWNED },
   { FILE_TYPE_DIR, "var", 0755},
   { FILE_TYPE_SYMLINK, "var/tmp", 0755, "/tmp"},
+  { FILE_TYPE_SYMLINK, "var/run", 0755, "/run"},
   { FILE_TYPE_SYMLINK, "lib", 0755, "usr/lib"},
   { FILE_TYPE_SYMLINK, "bin", 0755, "usr/bin" },
   { FILE_TYPE_SYMLINK, "sbin", 0755, "usr/sbin"},
